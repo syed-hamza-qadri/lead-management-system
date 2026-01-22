@@ -69,8 +69,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Create session in database
+    const sessionUrl = new URL('/api/sessions', request.nextUrl.origin).toString()
+    console.log('[v0] Creating session at:', sessionUrl)
     const sessionResponse = await fetch(
-      '/api/sessions',
+      sessionUrl,
       {
         method: 'POST',
         headers: {
@@ -97,9 +99,13 @@ export async function POST(request: NextRequest) {
       message: 'Login successful',
     })
   } catch (error) {
-    console.error('[v0] Login error:', error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.error('[v0] Login error:', errorMessage, error)
     return NextResponse.json(
-      { error: 'Login failed' },
+      { 
+        error: 'Login failed',
+        details: process.env.NODE_ENV === 'development' ? errorMessage : undefined
+      },
       { status: 500 }
     )
   }

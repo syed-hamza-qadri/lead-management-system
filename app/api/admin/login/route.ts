@@ -84,8 +84,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Create session for admin
+    const sessionUrl = new URL('/api/sessions', request.nextUrl.origin).toString()
+    console.log('Admin creating session at:', sessionUrl)
     const sessionResponse = await fetch(
-      '/api/sessions',
+      sessionUrl,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -108,9 +110,13 @@ export async function POST(request: NextRequest) {
       user: adminUser,
     })
   } catch (error) {
-    console.error('Admin login error:', error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.error('Admin login error:', errorMessage, error)
     return NextResponse.json(
-      { error: 'Login failed' },
+      { 
+        error: 'Login failed',
+        details: process.env.NODE_ENV === 'development' ? errorMessage : undefined
+      },
       { status: 500 }
     )
   }
