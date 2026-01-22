@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
 
     // Create session in database
     const sessionResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/sessions`,
+      '/api/sessions',
       {
         method: 'POST',
         headers: {

@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
 
     // Create session for admin
     const sessionResponse = await fetch(
-      `${request.nextUrl.origin}/api/sessions`,
+      '/api/sessions',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
