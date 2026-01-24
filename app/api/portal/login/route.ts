@@ -2,42 +2,48 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
 import { comparePassword } from '@/lib/password'
+import { z } from 'zod'
+
+// Validation schema
+const LoginSchema = z.object({
+  name: z.string()
+    .min(1, 'Name is required')
+    .max(100, 'Name must be less than 100 characters'),
+  password: z.string()
+    .min(6, 'Password must be at least 6 characters')
+    .max(100, 'Password must be less than 100 characters'),
+})
 
 export async function POST(request: NextRequest) {
-  const { name, password } = await request.json()
-
-  if (!name || !password) {
-    return NextResponse.json(
-      { error: 'Name and password are required' },
-      { status: 400 }
-    )
-  }
-
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {
-            // The `setAll` method was called from a Server Component.
-            // This can be ignored if you have middleware refreshing
-            // user sessions.
-          }
-        },
-      },
-    }
-  )
-
   try {
+    // Validate input
+    const body = await request.json()
+    const { name, password } = LoginSchema.parse(body)
+
+    const cookieStore = await cookies()
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll()
+          },
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) =>
+                cookieStore.set(name, value, options)
+              )
+            } catch {
+              // The `setAll` method was called from a Server Component.
+              // This can be ignored if you have middleware refreshing
+              // user sessions.
+            }
+          },
+        },
+      }
+    )
+
     // Verify employee/manager credentials using name - allow both employee and manager roles
     const { data: userData, error: userError } = await supabase
       .from('users')
@@ -88,16 +94,26 @@ export async function POST(request: NextRequest) {
     if (!sessionResponse.ok) throw new Error('Failed to create session')
     const sessionData = await sessionResponse.json()
 
-    // Return user data with token
+    // Return user data with token in secure HttpOnly cookie
     const { password: _, ...userWithoutPassword } = user
     
     console.log('[v0] Login successful, returning user:', userWithoutPassword)
     
-    return NextResponse.json({
+    const response = NextResponse.json({
       user: userWithoutPassword,
-      token: sessionData.token,
       message: 'Login successful',
     })
+
+    // Set HttpOnly secure cookie (cannot be accessed by JavaScript)
+    response.cookies.set('session_token', sessionData.token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 30 * 24 * 60 * 60, // 30 days in seconds
+      path: '/',
+    })
+
+    return response
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     console.error('[v0] Login error:', errorMessage, error)

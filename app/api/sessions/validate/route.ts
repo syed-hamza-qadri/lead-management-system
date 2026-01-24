@@ -3,7 +3,8 @@ import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET(request: NextRequest) {
-  const token = request.headers.get('Authorization')?.replace('Bearer ', '')
+  // Get token from HttpOnly cookie
+  const token = request.cookies.get('session_token')?.value
 
   if (!token) {
     return NextResponse.json(
@@ -70,7 +71,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const token = request.headers.get('Authorization')?.replace('Bearer ', '')
+  // Get token from HttpOnly cookie
+  const token = request.cookies.get('session_token')?.value
 
   if (!token) {
     return NextResponse.json(

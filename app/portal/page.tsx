@@ -53,28 +53,20 @@ export default function PortalPage() {
       if (!isLoggedIn) return
       
       try {
+        // Optimized: Single query with left join for lead counts
         const { data, error } = await supabase
           .from('niches')
-          .select('id, name')
+          .select('id, name, leads(id)')
           .order('name')
 
         if (error) throw error
 
-        // Get lead counts
+        // Transform data to include lead counts
         if (data) {
-          const nichesWithCounts = await Promise.all(
-            data.map(async (niche: any) => {
-              const { count } = await supabase
-                .from('leads')
-                .select('id', { count: 'exact', head: true })
-                .eq('niche_id', niche.id)
-
-              return {
-                ...niche,
-                lead_count: count || 0,
-              }
-            })
-          )
+          const nichesWithCounts = data.map((niche: any) => ({
+            ...niche,
+            lead_count: niche.leads?.length || 0,
+          }))
           setNiches(nichesWithCounts)
         }
       } catch (error) {
@@ -93,7 +85,7 @@ export default function PortalPage() {
     setLoginLoading(true)
 
     try {
-      const response = await fetch('/api/employee/login', {
+      const response = await fetch('/api/portal/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -113,8 +105,7 @@ export default function PortalPage() {
         return
       }
 
-      // Store session
-      localStorage.setItem('session_token', data.token)
+      // Store only user data in localStorage (token is in HttpOnly cookie)
       localStorage.setItem('employee_user', JSON.stringify(data.user))
 
       toast({
@@ -141,20 +132,13 @@ export default function PortalPage() {
 
   const handleLogout = async () => {
     try {
-      const sessionToken = localStorage.getItem('session_token')
-      if (sessionToken) {
-        // Delete session from backend
-        await fetch('/api/sessions/validate', {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${sessionToken}`,
-          },
-        })
-      }
+      // Token is in HttpOnly cookie, automatically sent with request
+      await fetch('/api/sessions/validate', {
+        method: 'DELETE',
+      })
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
-      localStorage.removeItem('session_token')
       localStorage.removeItem('employee_user')
       setUser(null)
       setIsLoggedIn(false)

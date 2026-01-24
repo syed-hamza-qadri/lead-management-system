@@ -1,51 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { z } from 'zod'
 
-const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || 'shaq2154'
+// Admin password from server-only environment variable (NOT NEXT_PUBLIC_*)
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'
+
+// Validation schema
+const AdminLoginSchema = z.object({
+  password: z.string()
+    .min(1, 'Password is required')
+    .max(100, 'Password is invalid'),
+})
 
 export async function POST(request: NextRequest) {
-  const { password } = await request.json()
-
-  if (!password) {
-    return NextResponse.json(
-      { error: 'Password is required' },
-      { status: 400 }
-    )
-  }
-
-  // Verify admin password
-  if (password !== ADMIN_PASSWORD) {
-    return NextResponse.json(
-      { error: 'Invalid admin password' },
-      { status: 401 }
-    )
-  }
-
-  // Create backend session for admin
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {
-            // Ignored
-          }
-        },
-      },
-    }
-  )
-
   try {
+    // Validate input
+    const body = await request.json()
+    const { password } = AdminLoginSchema.parse(body)
+
+    // Verify admin password
+    if (password !== ADMIN_PASSWORD) {
+      return NextResponse.json(
+        { error: 'Invalid admin password' },
+        { status: 401 }
+      )
+    }
+
+    // Create backend session for admin
+    const cookieStore = await cookies()
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll()
+          },
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) =>
+                cookieStore.set(name, value, options)
+              )
+            } catch {
+              // Ignored
+            }
+          },
+        },
+      }
+    )
+
     // Check if ANY admin already exists
     const { data: existingAdmins, error: checkError } = await supabase
       .from('users')
@@ -104,11 +108,21 @@ export async function POST(request: NextRequest) {
 
     const sessionData = await sessionResponse.json()
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       message: 'Admin login successful',
-      token: sessionData.token,
       user: adminUser,
     })
+
+    // Set HttpOnly secure cookie (cannot be accessed by JavaScript)
+    response.cookies.set('session_token', sessionData.token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 30 * 24 * 60 * 60, // 30 days in seconds
+      path: '/',
+    })
+
+    return response
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     console.error('Admin login error:', errorMessage, error)

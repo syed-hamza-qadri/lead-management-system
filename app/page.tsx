@@ -34,9 +34,7 @@ export default function Home() {
         return
       }
 
-      // Store admin session token
-      const data = await response.json()
-      localStorage.setItem('admin_token', data.token)
+      // Token is in HttpOnly cookie, no need to store manually
       localStorage.setItem('admin_role', 'admin')
       router.push('/admin')
     } catch (err) {

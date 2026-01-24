@@ -39,27 +39,19 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState({ total_leads: 0, total_responses: 0, active_users: 0 })
   const [selectedActivity, setSelectedActivity] = useState<ActivityLog | null>(null)
   const [showDialog, setShowDialog] = useState(false)
+  const [currentPage, setCurrentPage] = useState(0)
+  const [totalLogsCount, setTotalLogsCount] = useState(0)
+  const logsPerPage = 20
   const supabase = getSupabaseClient()
 
   // Check admin authentication on mount
   useEffect(() => {
     const validateAdminSession = async () => {
       try {
-        const adminToken = localStorage.getItem('admin_token')
-        if (!adminToken) {
-          router.push('/')
-          return
-        }
-
-        // Validate token with backend
-        const response = await fetch('/api/sessions/validate', {
-          headers: {
-            'Authorization': `Bearer ${adminToken}`,
-          },
-        })
+        // Token is in HttpOnly cookie, automatically sent with request
+        const response = await fetch('/api/sessions/validate')
 
         if (!response.ok) {
-          localStorage.removeItem('admin_token')
           localStorage.removeItem('admin_role')
           router.push('/')
           return
@@ -78,14 +70,16 @@ export default function AdminDashboard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Fetch activity logs
-        const { data: logsData, error: logsError } = await supabase
+        // Fetch activity logs with pagination
+        const { data: logsData, count, error: logsError } = await supabase
           .from('activity_log')
-          .select('*')
+          .select('*', { count: 'exact' })
           .order('created_at', { ascending: false })
-          .limit(50)
+          .range(currentPage * logsPerPage, (currentPage + 1) * logsPerPage - 1)
 
         if (logsError) throw logsError
+        
+        setTotalLogsCount(count || 0)
 
         // Fetch users
         const { data: usersData, error: usersError } = await supabase
@@ -166,7 +160,7 @@ export default function AdminDashboard() {
     return () => {
       subscription.unsubscribe()
     }
-  }, [supabase])
+  }, [supabase, currentPage])
 
   const getActionColor = (action: string) => {
     const colors: Record<string, string> = {
@@ -179,20 +173,13 @@ export default function AdminDashboard() {
 
   const handleLogout = async () => {
     try {
-      const adminToken = localStorage.getItem('admin_token')
-      if (adminToken) {
-        // Delete session from backend
-        await fetch('/api/sessions/validate', {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${adminToken}`,
-          },
-        })
-      }
+      // Token is in HttpOnly cookie, automatically sent with request
+      await fetch('/api/sessions/validate', {
+        method: 'DELETE',
+      })
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
-      localStorage.removeItem('admin_token')
       localStorage.removeItem('admin_role')
       router.push('/')
     }
@@ -339,6 +326,36 @@ export default function AdminDashboard() {
                   </div>
                 )}
               </CardContent>
+              
+              {/* Pagination Controls */}
+              {totalLogsCount > logsPerPage && (
+                <div className="flex items-center justify-between border-t border-border p-4">
+                  <div className="text-sm text-muted-foreground">
+                    Showing {currentPage * logsPerPage + 1} to {Math.min((currentPage + 1) * logsPerPage, totalLogsCount)} of {totalLogsCount} logs
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(Math.max(0, currentPage - 1))}
+                      disabled={currentPage === 0}
+                    >
+                      Previous
+                    </Button>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm">Page {currentPage + 1} of {Math.ceil(totalLogsCount / logsPerPage)}</span>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(currentPage + 1)}
+                      disabled={(currentPage + 1) * logsPerPage >= totalLogsCount}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
             </Card>
           </TabsContent>
 
