@@ -1,0 +1,2099 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { getSupabaseClient } from '@/lib/supabase-client'
+import {
+  getManagerCallers,
+  assignNicheToCaller,
+  assignCityToCaller,
+  unassignNicheFromCaller,
+  unassignCityFromCaller,
+} from '@/lib/auth'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Loader2, LogOut, RefreshCw, Plus, Edit2 } from 'lucide-react'
+import { useToast } from '@/hooks/use-toast'
+
+interface Caller {
+  id: string
+  name: string
+  email: string
+  assignmentId: string
+}
+
+interface Niche {
+  id: string
+  name: string
+  description?: string
+}
+
+interface City {
+  id: string
+  name: string
+  niche_id: string
+}
+
+interface Lead {
+  id: string
+  niche_id: string
+  city_id: string
+  data: Record<string, any>
+  created_by?: string
+  assigned_to?: string
+  assigned_by_id?: string
+  created_at: string
+  status?: string
+  creator?: { id: string; name: string }
+}
+
+interface LeadResponse {
+  action: string
+}
+
+interface CallerPerformance {
+  assigned: number
+  approved: number
+  declined: number
+  scheduled: number
+  pending: number
+}
+
+export default function ManagerPortal() {
+  const router = useRouter()
+  const { toast } = useToast()
+  const supabase = getSupabaseClient()
+
+  const [loading, setLoading] = useState<boolean>(true)
+  const [callers, setCallers] = useState<Caller[]>([])
+  const [allUsers, setAllUsers] = useState<Caller[]>([])
+  const [niches, setNiches] = useState<Niche[]>([])
+  const [cities, setCities] = useState<City[]>([])
+  const [leads, setLeads] = useState<Lead[]>([])
+  const [callerNiches, setCallerNiches] = useState<{ [key: string]: Niche[] }>({})
+  const [callerCities, setCallerCities] = useState<{ [key: string]: City[] }>({})
+  const [callerPerformance, setCallerPerformance] = useState<{ [key: string]: CallerPerformance }>({})
+  const [cityAssignmentsData, setCityAssignmentsData] = useState<any[]>([])
+  const [leadResponses, setLeadResponses] = useState<{ [leadId: string]: any }>({})
+  
+  const [selectedLeadForDetails, setSelectedLeadForDetails] = useState<any>(null)
+  const [leadDetailsDialogOpen, setLeadDetailsDialogOpen] = useState(false)
+  const [pendingCallerSelections, setPendingCallerSelections] = useState<{ [nicheId: string]: string }>({})
+  const [pendingCitySelections, setPendingCitySelections] = useState<{ [nicheId: string]: string }>({})
+  const [assigningPending, setAssigningPending] = useState<string>('')
+  
+  // Assigned reassignment state
+  const [assignedCallerSelections, setAssignedCallerSelections] = useState<{ [cityId: string]: string }>({})
+  const [reassigningCity, setReassigningCity] = useState<string>('')
+  
+  // Tab state
+  const [activeTab, setActiveTab] = useState<string>('dashboard')
+  
+  // Tab loading states
+  const [tabLoadingStates, setTabLoadingStates] = useState<{
+    dashboard?: boolean
+    'assign-niche'?: boolean
+    leads?: boolean
+    setup?: boolean
+  }>({})
+  
+  // Lead filters state
+  const [leadSearchFilter, setLeadSearchFilter] = useState<string>('')
+  const [leadNicheFilter, setLeadNicheFilter] = useState<string>('')
+  const [leadCityFilter, setLeadCityFilter] = useState<string>('')
+  const [leadCreatedByFilter, setLeadCreatedByFilter] = useState<string>('')
+  const [leadAssignedToFilter, setLeadAssignedToFilter] = useState<string>('')
+
+  // Setup tab states
+  const [setupDialogs, setSetupDialogs] = useState<{
+    niche?: boolean
+    city?: boolean
+    lead?: boolean
+  }>({})
+  const [setupForms, setSetupForms] = useState<{
+    nicheName?: string
+    cityName?: string
+    selectedNiche?: string
+    leadName?: string
+    selectedLeadNiche?: string
+    selectedLeadCity?: string
+    leadDetails?: string
+  }>({})
+  const [setupSaving, setSetupSaving] = useState(false)
+  const [editingNiche, setEditingNiche] = useState<{id: string, name: string} | null>(null)
+  const [editingCity, setEditingCity] = useState<{id: string, name: string, niche_id: string} | null>(null)
+
+  useEffect(() => {
+    fetchData()
+  }, [])
+
+  const fetchData = async () => {
+    try {
+      setLoading(true)
+      const userId = localStorage.getItem('userId')
+      if (!userId) {
+        router.push('/portal')
+        return
+      }
+
+      // Fetch callers assigned to this manager
+      const callersData = await getManagerCallers(userId)
+      let callersToDisplay: Caller[] = (callersData as any[]).length > 0 
+        ? (callersData as any[]).map(c => ({
+            id: c.id || c.users?.id,
+            name: c.name || c.users?.name,
+            email: c.email || c.users?.email,
+            assignmentId: c.assignmentId || c.id
+          }))
+        : []
+      
+      // If no callers assigned yet, fetch all available callers
+      if (callersToDisplay.length === 0) {
+        const { data: allCallers } = await supabase
+          .from('users')
+          .select('id, name, email')
+          .eq('role', 'caller')
+          .order('name') as any
+        
+        callersToDisplay = ((allCallers || []) as any[]).map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          email: c.email,
+          assignmentId: ''
+        }))
+      }
+      
+      // Also fetch all managers for assignment lookups
+      const { data: allManagers } = await supabase
+        .from('users')
+        .select('id, name, email')
+        .eq('role', 'manager')
+        .order('name') as any
+      
+      const managersToDisplay = ((allManagers || []) as any[]).map((m: any) => ({
+        id: m.id,
+        name: m.name,
+        email: m.email,
+        assignmentId: ''
+      }))
+      
+      // Combine callers and managers for lookups only
+      const allUsersForLookup = [...callersToDisplay, ...managersToDisplay]
+      
+      // Keep original callers for dashboard and keep managers separate for lookups
+      setCallers(callersToDisplay)
+      setAllUsers(allUsersForLookup)
+
+      // Fetch all niches and cities
+      const { data: nichesData } = await supabase.from('niches').select('*').order('name') as any
+      const { data: citiesData } = await supabase.from('cities').select('*').order('name') as any
+      const { data: leadsData, error: leadsError } = await supabase
+        .from('leads')
+        .select('*, creator:created_by(id, name)')
+        .order('created_at', { ascending: false }) as any
+
+      if (leadsError) {
+        console.error('Error fetching leads:', leadsError)
+      }
+
+      setNiches((nichesData || []) as Niche[])
+      setCities((citiesData || []) as City[])
+      setLeads((leadsData || []) as Lead[])
+
+      // Fetch all city assignments with caller and assigned_by user info
+      const { data: allCityAssignments } = await supabase
+        .from('city_assignments')
+        .select('city_id, caller_id, assigned_by')
+        .order('created_at', { ascending: false }) as any
+      
+      setCityAssignmentsData(allCityAssignments || [])
+
+      // Fetch all lead responses to show actions
+      const { data: allLeadResponses } = await supabase
+        .from('lead_responses')
+        .select('lead_id, action, scheduled_for, created_at, response_text')
+        .order('created_at', { ascending: false }) as any
+
+      // Create a map of lead_id to latest response
+      const responseMap: { [leadId: string]: any } = {}
+      ;(allLeadResponses || []).forEach((response: any) => {
+        if (!responseMap[response.lead_id]) {
+          responseMap[response.lead_id] = response
+        }
+      })
+      setLeadResponses(responseMap)
+
+      // Fetch assignments for each caller that will be displayed
+      for (const caller of callersToDisplay) {
+        const { data: nicheAssignments } = await supabase
+          .from('niche_assignments')
+          .select('niches(id, name)')
+          .eq('caller_id', caller.id) as any
+
+        const { data: cityAssignments } = await supabase
+          .from('city_assignments')
+          .select('cities(id, name)')
+          .eq('caller_id', caller.id) as any
+
+        // Get all city IDs assigned to this caller
+        const assignedCityIds = (cityAssignments?.map((ca: any) => ca.cities?.id) || []).filter(Boolean)
+
+        // Fetch all leads in the cities assigned to this caller
+        let leadsInAssignedCities: any[] = []
+        if (assignedCityIds.length > 0) {
+          const { data: citiesLeads } = await supabase
+            .from('leads')
+            .select('id')
+            .in('city_id', assignedCityIds) as any
+          leadsInAssignedCities = citiesLeads || []
+        }
+
+        // Get lead IDs for this caller
+        const leadsInCitiesIds = leadsInAssignedCities.map(l => l.id)
+
+        // Fetch responses only for leads in assigned cities
+        const { data: responses } = await supabase
+          .from('lead_responses')
+          .select('lead_id, action')
+          .in('lead_id', leadsInCitiesIds.length > 0 ? leadsInCitiesIds : ['']) as any
+
+        // Count actions per lead
+        const leadsWithActions = new Set<string>()
+        let approved = 0
+        let declined = 0
+        let scheduled = 0
+
+        ;(responses || []).forEach((response: any) => {
+          leadsWithActions.add(response.lead_id)
+          if (response.action === 'approve') approved++
+          else if (response.action === 'decline') declined++
+          else if (response.action === 'later') scheduled++
+        })
+
+        // Pending leads = total leads in assigned cities - leads with any action
+        const pending = leadsInCitiesIds.length - leadsWithActions.size
+
+        setCallerPerformance(prev => ({
+          ...prev,
+          [caller.id]: {
+            assigned: leadsInCitiesIds.length,
+            approved,
+            declined,
+            scheduled,
+            pending
+          }
+        }))
+
+        setCallerNiches(prev => ({
+          ...prev,
+          [caller.id]: (nicheAssignments?.map((na: any) => na.niches) || []) as Niche[]
+        }))
+
+        setCallerCities(prev => ({
+          ...prev,
+          [caller.id]: (cityAssignments?.map((ca: any) => ca.cities) || []) as City[]
+        }))
+      }
+    } catch (error) {
+      console.error('Error fetching data:', error)
+      toast({
+        title: 'Error',
+        description: 'Failed to load data',
+        variant: 'destructive',
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const reloadLeadsOnly = async () => {
+    try {
+      // Fetch fresh leads data
+      const { data: leadsData, error: leadsError } = await supabase
+        .from('leads')
+        .select('*, creator:created_by(id, name)')
+        .order('created_at', { ascending: false }) as any
+
+      if (leadsError) {
+        console.error('Error fetching leads:', leadsError)
+        return
+      }
+
+      // Fetch fresh niches and cities (in case they were added/updated)
+      const { data: nichesData } = await supabase.from('niches').select('*').order('name') as any
+      const { data: citiesData } = await supabase.from('cities').select('*').order('name') as any
+
+      // Fetch fresh city assignments (in case lead was moved to different city)
+      const { data: allCityAssignments } = await supabase
+        .from('city_assignments')
+        .select('city_id, caller_id, assigned_by')
+        .order('created_at', { ascending: false }) as any
+
+      // Fetch fresh callers and managers for accurate lookups
+      const { data: freshCallers } = await supabase
+        .from('users')
+        .select('id, name, email')
+        .eq('role', 'caller')
+        .order('name') as any
+
+      const { data: freshManagers } = await supabase
+        .from('users')
+        .select('id, name, email')
+        .eq('role', 'manager')
+        .order('name') as any
+
+      const freshCallersData = ((freshCallers || []) as any[]).map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        email: c.email,
+        assignmentId: ''
+      }))
+
+      const freshManagersData = ((freshManagers || []) as any[]).map((m: any) => ({
+        id: m.id,
+        name: m.name,
+        email: m.email,
+        assignmentId: ''
+      }))
+
+      const freshAllUsers = [...freshCallersData, ...freshManagersData]
+
+      // Fetch fresh lead responses
+      const { data: allLeadResponses } = await supabase
+        .from('lead_responses')
+        .select('lead_id, action, scheduled_for, created_at, response_text')
+        .order('created_at', { ascending: false }) as any
+
+      // Create a map of lead_id to latest response
+      const responseMap: { [leadId: string]: any } = {}
+      ;(allLeadResponses || []).forEach((response: any) => {
+        if (!responseMap[response.lead_id]) {
+          responseMap[response.lead_id] = response
+        }
+      })
+
+      // Update all states
+      setLeads((leadsData || []) as Lead[])
+      setNiches((nichesData || []) as Niche[])
+      setCities((citiesData || []) as City[])
+      setCityAssignmentsData(allCityAssignments || [])
+      setAllUsers(freshAllUsers)
+      setLeadResponses(responseMap)
+
+      toast({
+        title: 'Success',
+        description: 'Leads table reloaded with latest data',
+      })
+    } catch (error) {
+      console.error('Error reloading leads:', error)
+      toast({
+        title: 'Error',
+        description: 'Failed to reload leads',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  // Lightweight refresh for dashboard - only fetch performance metrics
+  const refreshDashboard = async () => {
+    setTabLoadingStates(prev => ({ ...prev, dashboard: true }))
+    try {
+      const userId = localStorage.getItem('userId')
+      
+      // Refresh caller data to get updated names and info
+      const callersData = await getManagerCallers(userId || '')
+      let callersToDisplay: Caller[] = (callersData as any[]).length > 0 
+        ? (callersData as any[]).map(c => ({
+            id: c.id || c.users?.id,
+            name: c.name || c.users?.name,
+            email: c.email || c.users?.email,
+            assignmentId: c.assignmentId || c.id
+          }))
+        : []
+      
+      if (callersToDisplay.length === 0) {
+        const { data: allCallers } = await supabase
+          .from('users')
+          .select('id, name, email')
+          .eq('role', 'caller')
+          .order('name') as any
+        
+        callersToDisplay = ((allCallers || []) as any[]).map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          email: c.email,
+          assignmentId: ''
+        }))
+      }
+      
+      setCallers(callersToDisplay)
+      
+      // Refresh caller performance data
+      for (const caller of callersToDisplay) {
+        // Fetch fresh city assignments directly (don't rely on state which may not be updated)
+        const { data: cityAssignments } = await supabase
+          .from('city_assignments')
+          .select('city_id')
+          .eq('caller_id', caller.id) as any
+
+        const assignedCityIds = (cityAssignments?.map((ca: any) => ca.city_id) || []).filter(Boolean)
+
+        // Fetch all leads in the cities assigned to this caller
+        let leadsInAssignedCities: any[] = []
+        if (assignedCityIds.length > 0) {
+          const { data: citiesLeads } = await supabase
+            .from('leads')
+            .select('id')
+            .in('city_id', assignedCityIds) as any
+          leadsInAssignedCities = citiesLeads || []
+        }
+
+        const leadsInCitiesIds = leadsInAssignedCities.map(l => l.id)
+
+        // Fetch responses only for leads in assigned cities
+        const { data: responses } = await supabase
+          .from('lead_responses')
+          .select('lead_id, action')
+          .in('lead_id', leadsInCitiesIds.length > 0 ? leadsInCitiesIds : ['']) as any
+
+        // Count actions per lead
+        const leadsWithActions = new Set<string>()
+        let approved = 0
+        let declined = 0
+        let scheduled = 0
+
+        ;(responses || []).forEach((response: any) => {
+          leadsWithActions.add(response.lead_id)
+          if (response.action === 'approve') approved++
+          else if (response.action === 'decline') declined++
+          else if (response.action === 'later') scheduled++
+        })
+
+        // Pending leads = total leads in assigned cities - leads with any action
+        const pending = leadsInCitiesIds.length - leadsWithActions.size
+
+        setCallerPerformance(prev => ({
+          ...prev,
+          [caller.id]: {
+            assigned: leadsInCitiesIds.length,
+            approved,
+            declined,
+            scheduled,
+            pending
+          }
+        }))
+      }
+    } catch (error) {
+      console.error('Error refreshing dashboard:', error)
+    } finally {
+      setTabLoadingStates(prev => ({ ...prev, dashboard: false }))
+    }
+  }
+
+  // Lightweight refresh for assignment tab - only fetch assignments
+  const refreshAssignmentTab = async () => {
+    setTabLoadingStates(prev => ({ ...prev, 'assign-niche': true }))
+    try {
+      // Fetch fresh niches and cities
+      const { data: nichesData } = await supabase.from('niches').select('*').order('name') as any
+      const { data: citiesData } = await supabase.from('cities').select('*').order('name') as any
+      
+      setNiches((nichesData || []) as Niche[])
+      setCities((citiesData || []) as City[])
+
+      // Refresh assignments for each caller
+      for (const caller of callers) {
+        const { data: nicheAssignments } = await supabase
+          .from('niche_assignments')
+          .select('niches(id, name)')
+          .eq('caller_id', caller.id) as any
+
+        const { data: cityAssignments } = await supabase
+          .from('city_assignments')
+          .select('cities(id, name)')
+          .eq('caller_id', caller.id) as any
+
+        setCallerNiches(prev => ({
+          ...prev,
+          [caller.id]: (nicheAssignments?.map((na: any) => na.niches) || []) as Niche[]
+        }))
+
+        setCallerCities(prev => ({
+          ...prev,
+          [caller.id]: (cityAssignments?.map((ca: any) => ca.cities) || []) as City[]
+        }))
+      }
+    } catch (error) {
+      console.error('Error refreshing assignments:', error)
+    } finally {
+      setTabLoadingStates(prev => ({ ...prev, 'assign-niche': false }))
+    }
+  }
+
+  // Refresh leads tab - reloads leads data
+  const refreshLeadsTab = async () => {
+    setTabLoadingStates(prev => ({ ...prev, leads: true }))
+    try {
+      await reloadLeadsOnly()
+    } finally {
+      setTabLoadingStates(prev => ({ ...prev, leads: false }))
+    }
+  }
+
+  const refreshSetupTab = async () => {
+    setTabLoadingStates(prev => ({ ...prev, setup: true }))
+    try {
+      const [nicheRes, cityRes, leadRes] = await Promise.all([
+        supabase.from('niches').select('*').order('name'),
+        supabase.from('cities').select('*').order('name'),
+        supabase.from('leads').select('*').order('created_at', { ascending: false }),
+      ])
+
+      setNiches(nicheRes.data || [])
+
+      if (cityRes.data) {
+        const enrichedCities = (cityRes.data || []).map((city: any) => {
+          const niche = (nicheRes.data || []).find((n: any) => n.id === city.niche_id)
+          return {
+            ...city,
+            niche_name: niche?.name || 'Unknown',
+          }
+        })
+        setCities(enrichedCities)
+      }
+
+      setLeads(leadRes.data || [])
+    } catch (error) {
+      console.error('Error refreshing setup tab:', error)
+    } finally {
+      setTabLoadingStates(prev => ({ ...prev, setup: false }))
+    }
+  }
+
+  const handleAssignPendingNicheAndCity = async (nicheId: string) => {
+    // Find the city selection for this niche
+    const citySelectorKey = Object.keys(pendingCitySelections).find(key => key.startsWith(nicheId + '-'))
+    const cityId = citySelectorKey ? pendingCitySelections[citySelectorKey] : pendingCitySelections[nicheId]
+    const callerId = pendingCallerSelections[nicheId]
+    const userId = localStorage.getItem('userId')
+    
+    if (!callerId || !cityId || !userId) {
+      toast({
+        title: 'Error',
+        description: 'Please select both a caller and a city',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    try {
+      setAssigningPending(nicheId)
+      
+      // Check if already assigned
+      const existingNiche = await supabase
+        .from('niche_assignments')
+        .select('id')
+        .eq('caller_id', callerId)
+        .eq('niche_id', nicheId)
+        .single()
+
+      if (existingNiche.data) {
+        toast({
+          title: 'Conflict',
+          description: 'This caller already has this niche assigned',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      // Assign niche
+      const nicheSuccess = await assignNicheToCaller(callerId, nicheId, userId)
+      if (!nicheSuccess) throw new Error('Failed to assign niche')
+
+      // Assign city
+      const citySuccess = await assignCityToCaller(callerId, cityId, userId)
+      if (!citySuccess) throw new Error('Failed to assign city')
+
+      toast({
+        title: 'Success',
+        description: 'Niche and city assigned successfully',
+      })
+
+      // Clear selections for this niche
+      setPendingCallerSelections(prev => {
+        const newSelections = { ...prev }
+        delete newSelections[nicheId]
+        return newSelections
+      })
+      
+      // Clear all city selections that start with this nicheId
+      setPendingCitySelections(prev => {
+        const newSelections = { ...prev }
+        Object.keys(newSelections).forEach(key => {
+          if (key.startsWith(nicheId)) {
+            delete newSelections[key]
+          }
+        })
+        return newSelections
+      })
+
+      // Refresh data
+      fetchData()
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to assign niche and city',
+        variant: 'destructive',
+      })
+    } finally {
+      setAssigningPending('')
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/sessions/validate', {
+        method: 'DELETE',
+      })
+    } catch (error) {
+      console.error('Logout error:', error)
+    } finally {
+      localStorage.removeItem('employee_user')
+      localStorage.removeItem('userId')
+      toast({
+        title: 'Logged Out',
+        description: 'You have been logged out successfully',
+      })
+      router.push('/portal')
+    }
+  }
+
+  // Helper functions for formatting
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr)
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  }
+
+  const getRemainingDays = (scheduledDate: string) => {
+    const today = new Date()
+    const scheduled = new Date(scheduledDate)
+    const diffTime = scheduled.getTime() - today.getTime()
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+    return diffDays
+  }
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-background p-8 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </main>
+    )
+  }
+
+  return (
+    <main className="min-h-screen bg-background p-8">
+      <div className="max-w-6xl mx-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-foreground">Manager Dashboard</h1>
+            <p className="text-muted-foreground mt-2">Assign niches and cities to your callers</p>
+          </div>
+          <Button variant="outline" onClick={handleLogout} className="flex items-center gap-2">
+            <LogOut className="w-4 h-4" />
+            Logout
+          </Button>
+        </div>
+
+        {/* Summary Cards - Pending Cities and Total Leads */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Cities Pending</p>
+              <p className="text-2xl font-bold text-primary">
+                {cities.filter(c => !cityAssignmentsData.some(ca => ca.city_id === c.id)).length}
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Total Leads</p>
+              <p className="text-2xl font-bold text-primary">
+                {leads.length}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Tabs Container */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="dashboard" disabled={tabLoadingStates.dashboard} className="flex items-center gap-2">
+              Dashboard
+              {tabLoadingStates.dashboard && <Loader2 className="w-4 h-4 animate-spin" />}
+            </TabsTrigger>
+            <TabsTrigger value="assign-niche" disabled={tabLoadingStates['assign-niche']} className="flex items-center gap-2">
+              Assign Niche & City
+              {tabLoadingStates['assign-niche'] && <Loader2 className="w-4 h-4 animate-spin" />}
+            </TabsTrigger>
+            <TabsTrigger value="leads" disabled={tabLoadingStates.leads} className="flex items-center gap-2">
+              Leads
+              {tabLoadingStates.leads && <Loader2 className="w-4 h-4 animate-spin" />}
+            </TabsTrigger>
+            <TabsTrigger value="setup" disabled={tabLoadingStates.setup} className="flex items-center gap-2">
+              Setup
+              {tabLoadingStates.setup && <Loader2 className="w-4 h-4 animate-spin" />}
+            </TabsTrigger>
+          </TabsList>
+
+          {/* Dashboard Tab - Shows Performance and Current Assignments */}
+          <TabsContent value="dashboard" className="space-y-6">
+        {callers.length === 0 && leads.length === 0 ? (
+          <Card>
+            <CardContent className="p-12 text-center">
+              <p className="text-muted-foreground mb-4">No callers or leads assigned to you yet</p>
+              <p className="text-sm text-muted-foreground">Please contact your admin to assign callers to your team</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-6">
+            {/* Caller Performance Metrics */}
+            <Card className="mt-6">
+              <CardHeader className="flex flex-row items-start justify-between pb-3">
+                <div className="space-y-1">
+                  <CardTitle>Caller Performance Metrics</CardTitle>
+                  <CardDescription>Overview of your callers' performance and capacity</CardDescription>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => refreshDashboard()}
+                  disabled={tabLoadingStates.dashboard}
+                  className="h-8 w-8 p-0"
+                  title="Reload metrics"
+                >
+                  {tabLoadingStates.dashboard ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4" />
+                  )}
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {callers.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No callers assigned yet</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {callers.map(caller => {
+                      const performance = callerPerformance[caller.id] || { assigned: 0, approved: 0, declined: 0, scheduled: 0, pending: 0 }
+                      const nicheCount = (callerNiches[caller.id] || []).length
+                      const cityCount = (callerCities[caller.id] || []).length
+                      const total = performance.approved + performance.declined + performance.scheduled
+                      const conversionRate = total > 0 ? Math.round((performance.approved / total) * 100) : 0
+                      return (
+                        <Card key={caller.id} className="bg-gradient-to-br from-card to-muted/20">
+                          <CardHeader className="pb-1">
+                            <CardTitle className="text-base">{caller.name}</CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-2 text-sm pt-0">
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Total Niches:</span>
+                              <Badge variant="secondary">{nicheCount}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Total Cities:</span>
+                              <Badge variant="secondary">{cityCount}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Leads in Territory:</span>
+                              <Badge variant="outline">{performance.assigned || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Approved:</span>
+                              <Badge className="bg-green-100 text-green-700">{performance.approved || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Declined:</span>
+                              <Badge className="bg-red-100 text-red-700">{performance.declined || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Scheduled:</span>
+                              <Badge variant="outline">{performance.scheduled || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Pending:</span>
+                              <Badge className="bg-yellow-100 text-yellow-700">{performance.pending || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center pt-2 border-t border-border">
+                              <span className="font-semibold">Conversion Rate:</span>
+                              <Badge className="bg-gray-100 text-gray-900">{conversionRate}%</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Current Niche & City Assignments */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Current Niche & City Assignments</CardTitle>
+                <CardDescription>View all assigned niches and cities by caller</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {callers.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No callers assigned yet</p>
+                ) : (
+                  <div className="space-y-4">
+                    {callers
+                      .filter(caller => (callerNiches[caller.id]?.length || 0) > 0 || (callerCities[caller.id]?.length || 0) > 0)
+                      .map(caller => (
+                        <div key={caller.id} className="border border-border rounded-lg p-4">
+                          <h4 className="font-semibold mb-3">{caller.name}</h4>
+                          <div className="space-y-3">
+                            {(callerNiches[caller.id] || []).length === 0 ? (
+                              <p className="text-xs text-muted-foreground">No assignments</p>
+                            ) : (
+                              (callerNiches[caller.id] || []).map(niche => {
+                                const nicheCities = (callerCities[caller.id] || []).filter(city => {
+                                  const cityData = cities.find(c => c.id === city.id)
+                                  return cityData?.niche_id === niche.id
+                                })
+                                return (
+                                  <div key={niche.id} className="space-y-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <Badge variant="secondary">{niche.name}</Badge>
+                                      <span className="text-xs text-muted-foreground">→</span>
+                                      <div className="flex flex-wrap gap-1">
+                                        {nicheCities.length === 0 ? (
+                                          <span className="text-xs text-muted-foreground italic">No cities</span>
+                                        ) : (
+                                          nicheCities.map(city => (
+                                            <Badge key={city.id} variant="outline" className="text-xs">{city.name}</Badge>
+                                          ))
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              })
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+          </TabsContent>
+
+          {/* Assign Niche & City Tab */}
+          <TabsContent value="assign-niche" className="space-y-6">
+        <Card className="mt-6">
+          <CardHeader className="flex flex-row items-start justify-between pb-3">
+            <div className="space-y-1">
+              <CardTitle>Pending Niche & City Assignments</CardTitle>
+              <CardDescription>Assign pending niches and cities to your callers</CardDescription>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => refreshAssignmentTab()}
+              disabled={tabLoadingStates['assign-niche']}
+              className="h-8 w-8 p-0"
+              title="Reload assignments"
+            >
+              {tabLoadingStates['assign-niche'] ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {niches.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No niches available</p>
+            ) : (
+              <div className="space-y-4">
+                {niches.map(niche => {
+                  const nicheCities = cities.filter(c => c.niche_id === niche.id)
+                  // Filter out cities that are assigned to any caller based on current state
+                  const pendingCities = nicheCities.filter(city => 
+                    !Object.values(callerCities || {}).flat().some(c => c.id === city.id)
+                  )
+
+                  if (pendingCities.length === 0) return null
+
+                  return (
+                    <div key={niche.id}>
+                      <h3 className="font-semibold text-sm mb-3">{niche.name}</h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {pendingCities.map(city => {
+                          const cardKey = `${niche.id}-${city.id}`
+                          return (
+                            <div key={city.id} className="border border-border rounded-lg p-3 bg-card">
+                              <p className="text-sm font-medium mb-2">{city.name}</p>
+                              <div className="space-y-2">
+                                <div>
+                                  <Label htmlFor={`caller-${cardKey}`} className="text-xs text-muted-foreground">Caller</Label>
+                                  <Select 
+                                    value={pendingCallerSelections[cardKey] || ''} 
+                                    onValueChange={async (callerId) => {
+                                      setPendingCallerSelections(prev => ({ ...prev, [cardKey]: callerId }))
+                                      
+                                      // Auto-assign when caller is selected
+                                      const userId = localStorage.getItem('userId')
+                                      if (!callerId || !userId) {
+                                        toast({
+                                          title: 'Error',
+                                          description: 'Failed to get user information',
+                                          variant: 'destructive',
+                                        })
+                                        return
+                                      }
+
+                                      try {
+                                        setAssigningPending(cardKey)
+                                        
+                                        // Check if city is already assigned to ANY caller
+                                        const existingCityAssignment = await supabase
+                                          .from('city_assignments')
+                                          .select('id, caller_id')
+                                          .eq('city_id', city.id)
+                                          .single()
+
+                                        if (existingCityAssignment.data) {
+                                          const assignedCallerName = callers.find(c => c.id === existingCityAssignment.data?.caller_id)?.name
+                                          toast({
+                                            title: 'Already Assigned',
+                                            description: `This city is already assigned to ${assignedCallerName}. Please reassign it in the Assigned section.`,
+                                            variant: 'destructive',
+                                          })
+                                          setPendingCallerSelections(prev => {
+                                            const newSel = { ...prev }
+                                            delete newSel[cardKey]
+                                            return newSel
+                                          })
+                                          return
+                                        }
+
+                                        // Check if niche is already assigned to this caller
+                                        const existingNiche = await supabase
+                                          .from('niche_assignments')
+                                          .select('id')
+                                          .eq('caller_id', callerId)
+                                          .eq('niche_id', niche.id)
+                                          .single()
+
+                                        // Only assign niche if not already assigned to this caller
+                                        if (!existingNiche.data) {
+                                          const nicheSuccess = await assignNicheToCaller(callerId, niche.id, userId)
+                                          if (!nicheSuccess) throw new Error('Failed to assign niche')
+                                        }
+
+                                        // Assign city (independent assignment)
+                                        const citySuccess = await assignCityToCaller(callerId, city.id, userId)
+                                        if (!citySuccess) throw new Error('Failed to assign city')
+
+                                        toast({
+                                          title: 'Success',
+                                          description: `${city.name} assigned to ${callers.find(c => c.id === callerId)?.name}`,
+                                        })
+
+                                        // Clear selection and refresh
+                                        setPendingCallerSelections(prev => {
+                                          const newSel = { ...prev }
+                                          delete newSel[cardKey]
+                                          return newSel
+                                        })
+                                        await Promise.all([refreshDashboard(), refreshAssignmentTab(), refreshLeadsTab()])
+                                      } catch (error) {
+                                        toast({
+                                          title: 'Error',
+                                          description: error instanceof Error ? error.message : 'Failed to assign',
+                                          variant: 'destructive',
+                                        })
+                                        setPendingCallerSelections(prev => {
+                                          const newSel = { ...prev }
+                                          delete newSel[cardKey]
+                                          return newSel
+                                        })
+                                      } finally {
+                                        setAssigningPending('')
+                                      }
+                                    }}
+                                    disabled={assigningPending === cardKey}
+                                  >
+                                    <SelectTrigger id={`caller-${cardKey}`} className="h-8 text-xs mt-1">
+                                      <SelectValue placeholder={assigningPending === cardKey ? "Assigning..." : "Select caller..."} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {callers.map(caller => (
+                                        <SelectItem key={caller.id} value={caller.id}>
+                                          {caller.name}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Assigned Niche & City Assignments */}
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle>Assigned Niche & City Assignments</CardTitle>
+            <CardDescription>Niches and cities already assigned to callers</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {niches.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No niches available</p>
+            ) : (
+              <div className="space-y-4">
+                {niches.map(niche => {
+                  const nicheCities = cities.filter(c => c.niche_id === niche.id)
+                  const assignedCities = nicheCities.filter(city =>
+                    Object.values(callerCities || {}).flat().some(c => c.id === city.id)
+                  )
+
+                  if (assignedCities.length === 0) return null
+
+                  return (
+                    <div key={niche.id}>
+                      <h3 className="font-semibold text-sm mb-3">{niche.name}</h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {assignedCities.map(city => {
+                          // Find which caller has this city assigned
+                          const assignedCallerForCity = callers.find(caller =>
+                            (callerCities[caller.id] || []).some(c => c.id === city.id)
+                          )
+
+                          const currentCallerSelection = assignedCallerSelections[city.id] || assignedCallerForCity?.id || ''
+
+                          return (
+                            <div key={city.id} className="border border-border rounded-lg p-3 bg-card">
+                              <p className="text-sm font-medium mb-2">{city.name}</p>
+                              <div className="space-y-2">
+                                <div>
+                                  <Label htmlFor={`assigned-caller-${city.id}`} className="text-xs text-muted-foreground">Caller</Label>
+                                  <Select 
+                                    value={currentCallerSelection} 
+                                    onValueChange={async (newCallerId) => {
+                                      if (!assignedCallerForCity) return
+                                      
+                                      const oldCallerId = assignedCallerForCity.id
+                                      const userId = localStorage.getItem('userId')
+                                      
+                                      if (!newCallerId || !userId) {
+                                        toast({
+                                          title: 'Error',
+                                          description: 'Failed to get user information',
+                                          variant: 'destructive',
+                                        })
+                                        return
+                                      }
+
+                                      // Handle Unassigned option
+                                      if (newCallerId === 'unassigned') {
+                                        try {
+                                          setReassigningCity(city.id)
+                                          
+                                          // Remove city assignment from old caller
+                                          const removeSuccess = await unassignCityFromCaller(oldCallerId, city.id)
+                                          if (!removeSuccess) throw new Error('Failed to remove assignment')
+                                          
+                                          // Check if old caller has any other cities from this niche
+                                          const otherCitiesInNiche = await supabase
+                                            .from('city_assignments')
+                                            .select('cities(id, niche_id)')
+                                            .eq('caller_id', oldCallerId)
+                                            .then((result: any) => 
+                                              result.data?.filter((ca: any) => ca.cities?.niche_id === niche.id) || []
+                                            )
+                                          
+                                          // If old caller has no more cities in this niche, remove the niche assignment too
+                                          if (otherCitiesInNiche.length === 0) {
+                                            await unassignNicheFromCaller(oldCallerId, niche.id)
+                                          }
+                                          
+                                          toast({
+                                            title: 'Success',
+                                            description: `${city.name} moved to pending`,
+                                          })
+                                          
+                                          setAssignedCallerSelections(prev => {
+                                            const newSel = { ...prev }
+                                            delete newSel[city.id]
+                                            return newSel
+                                          })
+                                          await Promise.all([refreshDashboard(), refreshAssignmentTab(), refreshLeadsTab()])
+                                        } catch (error) {
+                                          toast({
+                                            title: 'Error',
+                                            description: error instanceof Error ? error.message : 'Failed to unassign',
+                                            variant: 'destructive',
+                                          })
+                                          setAssignedCallerSelections(prev => {
+                                            const newSel = { ...prev }
+                                            delete newSel[city.id]
+                                            return newSel
+                                          })
+                                        } finally {
+                                          setReassigningCity('')
+                                        }
+                                        return
+                                      }
+
+                                      try {
+                                        setReassigningCity(city.id)
+                                        setAssignedCallerSelections(prev => ({ ...prev, [city.id]: newCallerId }))
+
+                                        // Check if already assigned to new caller
+                                        const existingCity = await supabase
+                                          .from('city_assignments')
+                                          .select('id')
+                                          .eq('caller_id', newCallerId)
+                                          .eq('city_id', city.id)
+                                          .single()
+
+                                        if (existingCity.data) {
+                                          toast({
+                                            title: 'Already Assigned',
+                                            description: 'This city is already assigned to this caller',
+                                            variant: 'destructive',
+                                          })
+                                          setAssignedCallerSelections(prev => {
+                                            const newSel = { ...prev }
+                                            delete newSel[city.id]
+                                            return newSel
+                                          })
+                                          return
+                                        }
+
+                                        // Remove from old caller
+                                        const removeSuccess = await unassignCityFromCaller(oldCallerId, city.id)
+                                        if (!removeSuccess) throw new Error('Failed to remove from previous caller')
+
+                                        // Check if old caller has any other cities from this niche
+                                        const otherCitiesInNiche = await supabase
+                                          .from('city_assignments')
+                                          .select('cities(id, niche_id)')
+                                          .eq('caller_id', oldCallerId)
+                                          .then((result: any) => 
+                                            result.data?.filter((ca: any) => ca.cities?.niche_id === niche.id) || []
+                                          )
+
+                                        // If old caller has no more cities in this niche, remove the niche assignment too
+                                        if (otherCitiesInNiche.length === 0) {
+                                          await unassignNicheFromCaller(oldCallerId, niche.id)
+                                        }
+
+                                        // Check if niche is assigned to new caller, if not assign it first
+                                        const existingNicheForNewCaller = await supabase
+                                          .from('niche_assignments')
+                                          .select('id')
+                                          .eq('caller_id', newCallerId)
+                                          .eq('niche_id', niche.id)
+                                          .single()
+
+                                        if (!existingNicheForNewCaller.data) {
+                                          const nicheAssignSuccess = await assignNicheToCaller(newCallerId, niche.id, userId)
+                                          if (!nicheAssignSuccess) throw new Error('Failed to assign niche to new caller')
+                                        }
+
+                                        // Assign city to new caller
+                                        const assignSuccess = await assignCityToCaller(newCallerId, city.id, userId)
+                                        if (!assignSuccess) throw new Error('Failed to assign to new caller')
+
+                                        toast({
+                                          title: 'Success',
+                                          description: `${city.name} reassigned to ${callers.find(c => c.id === newCallerId)?.name}`,
+                                        })
+
+                                        // Clear selection and refresh
+                                        setAssignedCallerSelections(prev => {
+                                          const newSel = { ...prev }
+                                          delete newSel[city.id]
+                                          return newSel
+                                        })
+                                        await Promise.all([refreshDashboard(), refreshAssignmentTab(), refreshLeadsTab()])
+                                      } catch (error) {
+                                        toast({
+                                          title: 'Error',
+                                          description: error instanceof Error ? error.message : 'Failed to reassign',
+                                          variant: 'destructive',
+                                        })
+                                        setAssignedCallerSelections(prev => {
+                                          const newSel = { ...prev }
+                                          delete newSel[city.id]
+                                          return newSel
+                                        })
+                                      } finally {
+                                        setReassigningCity('')
+                                      }
+                                    }}
+                                    disabled={reassigningCity === city.id}
+                                  >
+                                    <SelectTrigger id={`assigned-caller-${city.id}`} className="h-8 text-xs mt-1">
+                                      <SelectValue placeholder={reassigningCity === city.id ? "Reassigning..." : "Select caller..."} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="unassigned">
+                                        <span className="text-red-600">Unassigned</span>
+                                      </SelectItem>
+                                      {callers.map(caller => (
+                                        <SelectItem key={caller.id} value={caller.id}>
+                                          {caller.name}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+          </TabsContent>
+          {/* Leads Tab */}
+          <TabsContent value="leads" className="space-y-6">
+        <Card className="mt-6">
+          <CardHeader className="flex flex-row items-start justify-between pb-3">
+            <div className="space-y-1">
+              <CardTitle>View All Leads</CardTitle>
+              <CardDescription>Monitor all leads and their current assignment status</CardDescription>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => refreshLeadsTab()}
+              disabled={tabLoadingStates.leads}
+              className="h-8 w-8 p-0"
+              title="Reload table"
+            >
+              {tabLoadingStates.leads ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4" />
+              )}
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {leads.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No leads available yet. Create leads in the Lead Generator to view them here.</p>
+            ) : (
+              <>
+                {/* Search and Filters */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex-1 min-w-[250px]">
+                    <Input
+                      placeholder="Search by lead name..."
+                      value={leadSearchFilter}
+                      onChange={(e) => setLeadSearchFilter(e.target.value)}
+                      className="w-full"
+                    />
+                  </div>
+                  <div className="w-[140px] shrink-0">
+                    <Select value={leadNicheFilter} onValueChange={(v) => {
+                      setLeadNicheFilter(v)
+                      setLeadCityFilter('') // Reset city filter when niche changes
+                    }}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select niche..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {niches.map(niche => (
+                          <SelectItem key={niche.id} value={niche.id}>{niche.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="min-w-[140px] shrink-0">
+                    <Select value={leadCityFilter} onValueChange={setLeadCityFilter} disabled={!leadNicheFilter}>
+                      <SelectTrigger className="truncate">
+                        <SelectValue placeholder={!leadNicheFilter ? "Select niche first..." : "Select city..."} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {cities
+                          .filter(city => !leadNicheFilter || city.niche_id === leadNicheFilter)
+                          .map(city => (
+                            <SelectItem key={city.id} value={city.id}>{city.name}</SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="w-[140px] shrink-0">
+                    <Select value={leadCreatedByFilter} onValueChange={setLeadCreatedByFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Created by..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {/* Get unique creators from leads */}
+                        {Array.from(new Set(leads.map(l => l.creator?.id))).map(creatorId => {
+                          const creator = leads.find(l => l.creator?.id === creatorId)?.creator
+                          return creator ? (
+                            <SelectItem key={creator.id} value={creator.id}>{creator.name}</SelectItem>
+                          ) : null
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="w-[140px] shrink-0">
+                    <Select value={leadAssignedToFilter} onValueChange={setLeadAssignedToFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Assigned to..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {/* Get unique callers from city assignments */}
+                        {Array.from(new Set(cityAssignmentsData.map(ca => ca.caller_id))).map(callerId => {
+                          const caller = allUsers.find(u => u.id === callerId)
+                          return caller ? (
+                            <SelectItem key={caller.id} value={caller.id}>{caller.name}</SelectItem>
+                          ) : null
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setLeadSearchFilter('')
+                      setLeadNicheFilter('')
+                      setLeadCityFilter('')
+                      setLeadCreatedByFilter('')
+                      setLeadAssignedToFilter('')
+                    }}
+                    className="whitespace-nowrap shrink-0"
+                  >
+                    Clear All
+                  </Button>
+                </div>
+
+                {/* Table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="text-left px-4 py-2 font-semibold">#</th>
+                        <th className="text-left px-4 py-2 font-semibold">Lead Name</th>
+                        <th className="text-left px-4 py-2 font-semibold">Niche</th>
+                        <th className="text-left px-4 py-2 font-semibold">City</th>
+                        <th className="text-left px-4 py-2 font-semibold">Created At</th>
+                        <th className="text-left px-4 py-2 font-semibold">Created By</th>
+                        <th className="text-left px-4 py-2 font-semibold">Assigned To</th>
+                        <th className="text-left px-4 py-2 font-semibold">Assigned By</th>
+                        <th className="text-left px-4 py-2 font-semibold">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {leads
+                        .filter(lead => {
+                          const searchMatch = !leadSearchFilter || (lead.data?.name || 'Lead').toLowerCase().includes(leadSearchFilter.toLowerCase())
+                          const nicheMatch = !leadNicheFilter || lead.niche_id === leadNicheFilter
+                          const cityMatch = !leadCityFilter || lead.city_id === leadCityFilter
+                          const createdByMatch = !leadCreatedByFilter || lead.creator?.id === leadCreatedByFilter
+                          
+                          // For assigned to, find the caller assigned to this lead's city
+                          let assignedToMatch = true
+                          if (leadAssignedToFilter) {
+                            const cityAssignment = cityAssignmentsData.find(ca => ca.city_id === lead.city_id)
+                            assignedToMatch = cityAssignment?.caller_id === leadAssignedToFilter
+                          }
+                          
+                          return searchMatch && nicheMatch && cityMatch && createdByMatch && assignedToMatch
+                        })
+                        .map((lead, index) => {
+                          const niche = niches.find(n => n.id === lead.niche_id)
+                          const city = cities.find(c => c.id === lead.city_id)
+                          
+                          // Find the city assignment for this lead's city
+                          const cityAssignment = cityAssignmentsData.find(ca => ca.city_id === lead.city_id)
+                          // Get caller assigned to this city (from allUsers which includes both callers and managers)
+                          const assignedCaller = cityAssignment ? allUsers.find(u => u.id === cityAssignment.caller_id) : null
+                          // Get manager who made the assignment (from allUsers)
+                          const assignedByManager = cityAssignment ? allUsers.find(u => u.id === cityAssignment.assigned_by) : null
+                          
+                          // Get last action taken on this lead
+                          const lastResponse = leadResponses[lead.id]
+
+                          const getActionDisplay = () => {
+                            if (!lastResponse) return <span className="text-xs text-muted-foreground">—</span>
+                            
+                            const actionText = lastResponse.action?.charAt(0).toUpperCase() + lastResponse.action?.slice(1)
+                            
+                            if (lastResponse.action === 'later' && lastResponse.scheduled_for) {
+                              const daysRemaining = getRemainingDays(lastResponse.scheduled_for)
+                              return (
+                                <span className="text-xs text-amber-600">
+                                  {actionText} - {daysRemaining > 0 ? `${daysRemaining} days` : 'Due'}
+                                </span>
+                              )
+                            }
+                            
+                            if (lastResponse.action === 'approve') {
+                              return <Badge className="bg-green-100 text-green-700">{actionText}</Badge>
+                            }
+                            if (lastResponse.action === 'decline') {
+                              return <Badge className="bg-red-100 text-red-700">{actionText}</Badge>
+                            }
+                            
+                            return <Badge variant="outline">{actionText}</Badge>
+                          }
+                          
+                          return (
+                            <tr key={lead.id} className="border-b border-border hover:bg-muted/50">
+                              <td className="px-4 py-2 font-medium text-muted-foreground">{index + 1}</td>
+                              <td className="px-4 py-2">
+                                <button
+                                  onClick={() => {
+                                    setSelectedLeadForDetails(lead)
+                                    setLeadDetailsDialogOpen(true)
+                                  }}
+                                  className="text-primary hover:underline cursor-pointer font-medium"
+                                >
+                                  {lead.data?.name || 'Lead'}
+                                </button>
+                              </td>
+                              <td className="px-4 py-2 text-muted-foreground">{niche?.name}</td>
+                              <td className="px-4 py-2 text-muted-foreground">{city?.name}</td>
+                              <td className="px-4 py-2 text-xs text-muted-foreground">{formatDate(lead.created_at)}</td>
+                              <td className="px-4 py-2 text-sm">
+                                <Badge variant="secondary">{lead.creator?.name || 'Unknown'}</Badge>
+                              </td>
+                              <td className="px-4 py-2">
+                                {assignedCaller ? (
+                                  <Badge variant="outline">{assignedCaller.name}</Badge>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">Unassigned</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-2 text-sm">
+                                {assignedByManager ? (
+                                  <Badge variant="outline" className="bg-blue-50">{assignedByManager.name}</Badge>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-2 text-sm">
+                                {getActionDisplay()}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+          </TabsContent>
+
+          {/* Setup Tab - Add Niches, Cities, and Leads */}
+          <TabsContent value="setup" className="space-y-6">
+            <Card className="mt-6">
+              <CardHeader className="flex flex-row items-start justify-between pb-3">
+                <div className="space-y-1">
+                  <CardTitle>Setup Management</CardTitle>
+                  <CardDescription>Add and manage niches, cities, and leads</CardDescription>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => refreshSetupTab()}
+                  disabled={tabLoadingStates.setup}
+                  className="h-8 w-8 p-0"
+                  title="Reload setup"
+                >
+                  {tabLoadingStates.setup ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4" />
+                  )}
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-8">
+                {/* Niches & Cities Combined Section */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold">Niches & Cities</h3>
+                    <div className="flex gap-2">
+                      <Dialog open={setupDialogs.niche} onOpenChange={(open) => setSetupDialogs({...setupDialogs, niche: open})}>
+                        <Button onClick={() => setSetupDialogs({...setupDialogs, niche: true})} size="sm" className="gap-2">
+                          <Plus className="w-4 h-4" />
+                          Add Niche
+                        </Button>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Add Niche</DialogTitle>
+                            <DialogDescription>Create a new niche</DialogDescription>
+                          </DialogHeader>
+                          <form onSubmit={async (e) => {
+                            e.preventDefault()
+                            setSetupSaving(true)
+                            try {
+                              const { error } = await supabase
+                                .from('niches')
+                                .insert({ name: setupForms.nicheName })
+                              if (error) throw error
+                              toast({
+                                title: 'Success',
+                                description: 'Niche added successfully',
+                              })
+                              setSetupForms({...setupForms, nicheName: ''})
+                              setSetupDialogs({...setupDialogs, niche: false})
+                              await Promise.all([refreshDashboard(), refreshAssignmentTab(), refreshLeadsTab(), refreshSetupTab()])
+                            } catch (error) {
+                              toast({
+                                title: 'Error',
+                                description: 'Failed to add niche',
+                                variant: 'destructive',
+                              })
+                            } finally {
+                              setSetupSaving(false)
+                            }
+                          }} className="space-y-5">
+                            <div>
+                              <Label htmlFor="niche-name" className="mb-2 block">Niche Name</Label>
+                              <Input
+                                id="niche-name"
+                                placeholder="e.g., Real Estate, Salons"
+                                value={setupForms.nicheName || ''}
+                                onChange={(e) => setSetupForms({...setupForms, nicheName: e.target.value})}
+                              />
+                            </div>
+                            <Button type="submit" disabled={setupSaving} className="w-full">
+                              {setupSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                              Add Niche
+                            </Button>
+                          </form>
+                        </DialogContent>
+                      </Dialog>
+                      <Dialog open={setupDialogs.city} onOpenChange={(open) => setSetupDialogs({...setupDialogs, city: open})}>
+                        <Button onClick={() => setSetupDialogs({...setupDialogs, city: true})} size="sm" className="gap-2">
+                          <Plus className="w-4 h-4" />
+                          Add City
+                        </Button>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Add City</DialogTitle>
+                            <DialogDescription>Create a new city under a niche</DialogDescription>
+                          </DialogHeader>
+                          <form onSubmit={async (e) => {
+                            e.preventDefault()
+                            if (!setupForms.cityName || !setupForms.selectedNiche) {
+                              toast({
+                                title: 'Error',
+                                description: 'Please select a niche and enter city name',
+                                variant: 'destructive',
+                              })
+                              return
+                            }
+                            setSetupSaving(true)
+                            try {
+                              const { error } = await supabase
+                                .from('cities')
+                                .insert({ name: setupForms.cityName, niche_id: setupForms.selectedNiche })
+                              if (error) throw error
+                              toast({
+                                title: 'Success',
+                                description: 'City added successfully',
+                              })
+                              setSetupForms({...setupForms, cityName: '', selectedNiche: ''})
+                              setSetupDialogs({...setupDialogs, city: false})
+                              await Promise.all([refreshDashboard(), refreshAssignmentTab(), refreshLeadsTab(), refreshSetupTab()])
+                            } catch (error) {
+                              toast({
+                                title: 'Error',
+                                description: 'Failed to add city',
+                                variant: 'destructive',
+                              })
+                            } finally {
+                              setSetupSaving(false)
+                            }
+                          }} className="space-y-5">
+                            <div>
+                              <Label htmlFor="city-niche" className="mb-2 block">Select Niche</Label>
+                              <Select value={setupForms.selectedNiche || ''} onValueChange={(value) => setSetupForms({...setupForms, selectedNiche: value})}>
+                                <SelectTrigger id="city-niche">
+                                  <SelectValue placeholder="Choose a niche" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {niches.map(niche => (
+                                    <SelectItem key={niche.id} value={niche.id}>{niche.name}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <Label htmlFor="city-name" className="mb-2 block">City Name</Label>
+                              <Input
+                                id="city-name"
+                                placeholder="e.g., New York, Los Angeles"
+                                value={setupForms.cityName || ''}
+                                onChange={(e) => setSetupForms({...setupForms, cityName: e.target.value})}
+                              />
+                            </div>
+                            <Button type="submit" disabled={setupSaving} className="w-full">
+                              {setupSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                              Add City
+                            </Button>
+                          </form>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                  </div>
+                  {niches.length > 0 ? (
+                    <div className="space-y-3">
+                      {niches.map(niche => {
+                        const nicheCities = cities.filter(c => c.niche_id === niche.id)
+                        return (
+                          <div key={niche.id} className="p-3 bg-muted/50 rounded-lg">
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="font-semibold">{niche.name} →</p>
+                              <Dialog open={editingNiche?.id === niche.id} onOpenChange={(open) => !open && setEditingNiche(null)}>
+                                <button
+                                  onClick={() => setEditingNiche({id: niche.id, name: niche.name})}
+                                  className="p-1 hover:bg-background rounded transition-colors"
+                                  title="Edit niche"
+                                >
+                                  <Edit2 className="w-4 h-4 text-muted-foreground" />
+                                </button>
+                                <DialogContent>
+                                  <DialogHeader>
+                                    <DialogTitle>Edit Niche</DialogTitle>
+                                    <DialogDescription>Update niche name</DialogDescription>
+                                  </DialogHeader>
+                                  <form onSubmit={async (e) => {
+                                    e.preventDefault()
+                                    if (!editingNiche?.name) return
+                                    setSetupSaving(true)
+                                    try {
+                                      const { error } = await supabase
+                                        .from('niches')
+                                        .update({ name: editingNiche.name })
+                                        .eq('id', editingNiche.id)
+                                      if (error) throw error
+                                      toast({
+                                        title: 'Success',
+                                        description: 'Niche updated successfully',
+                                      })
+                                      setEditingNiche(null)
+                                      await Promise.all([refreshDashboard(), refreshAssignmentTab(), refreshLeadsTab(), refreshSetupTab()])
+                                    } catch (error) {
+                                      toast({
+                                        title: 'Error',
+                                        description: 'Failed to update niche',
+                                        variant: 'destructive',
+                                      })
+                                    } finally {
+                                      setSetupSaving(false)
+                                    }
+                                  }} className="space-y-5">
+                                    <div>
+                                      <Label htmlFor="edit-niche-name" className="mb-2 block">Niche Name</Label>
+                                      <Input
+                                        id="edit-niche-name"
+                                        placeholder="e.g., Real Estate, Salons"
+                                        value={editingNiche?.name || ''}
+                                        onChange={(e) => setEditingNiche({...editingNiche!, name: e.target.value})}
+                                      />
+                                    </div>
+                                    <Button type="submit" disabled={setupSaving} className="w-full">
+                                      {setupSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                                      Save Niche
+                                    </Button>
+                                  </form>
+                                </DialogContent>
+                              </Dialog>
+                            </div>
+                            <div className="flex flex-wrap gap-2 ml-4">
+                              {nicheCities.length > 0 ? (
+                                nicheCities.map(city => (
+                                  <div key={city.id} className="flex items-center gap-1">
+                                    <Badge variant="outline">{city.name}</Badge>
+                                    <Dialog open={editingCity?.id === city.id} onOpenChange={(open) => !open && setEditingCity(null)}>
+                                      <button
+                                        onClick={() => setEditingCity({id: city.id, name: city.name, niche_id: city.niche_id})}
+                                        className="p-0.5 hover:bg-muted rounded transition-colors"
+                                        title="Edit city"
+                                      >
+                                        <Edit2 className="w-3 h-3 text-muted-foreground" />
+                                      </button>
+                                      <DialogContent>
+                                        <DialogHeader>
+                                          <DialogTitle>Edit City</DialogTitle>
+                                          <DialogDescription>Update city details</DialogDescription>
+                                        </DialogHeader>
+                                        <form onSubmit={async (e) => {
+                                          e.preventDefault()
+                                          if (!editingCity?.name) return
+                                          setSetupSaving(true)
+                                          try {
+                                            const { error } = await supabase
+                                              .from('cities')
+                                              .update({ name: editingCity.name, niche_id: editingCity.niche_id })
+                                              .eq('id', editingCity.id)
+                                            if (error) throw error
+                                            toast({
+                                              title: 'Success',
+                                              description: 'City updated successfully',
+                                            })
+                                            setEditingCity(null)
+                                            await Promise.all([refreshDashboard(), refreshAssignmentTab(), refreshLeadsTab(), refreshSetupTab()])
+                                          } catch (error) {
+                                            toast({
+                                              title: 'Error',
+                                              description: 'Failed to update city',
+                                              variant: 'destructive',
+                                            })
+                                          } finally {
+                                            setSetupSaving(false)
+                                          }
+                                        }} className="space-y-5">
+                                          <div>
+                                            <Label htmlFor="edit-city-niche" className="mb-2 block">Select Niche</Label>
+                                            <Select value={editingCity?.niche_id || ''} onValueChange={(value) => setEditingCity({...editingCity!, niche_id: value})}>
+                                              <SelectTrigger id="edit-city-niche">
+                                                <SelectValue placeholder="Choose a niche" />
+                                              </SelectTrigger>
+                                              <SelectContent>
+                                                {niches.map(n => (
+                                                  <SelectItem key={n.id} value={n.id}>{n.name}</SelectItem>
+                                                ))}
+                                              </SelectContent>
+                                            </Select>
+                                          </div>
+                                          <div>
+                                            <Label htmlFor="edit-city-name" className="mb-2 block">City Name</Label>
+                                            <Input
+                                              id="edit-city-name"
+                                              placeholder="e.g., New York, Los Angeles"
+                                              value={editingCity?.name || ''}
+                                              onChange={(e) => setEditingCity({...editingCity!, name: e.target.value})}
+                                            />
+                                          </div>
+                                          <Button type="submit" disabled={setupSaving} className="w-full">
+                                            {setupSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                                            Save City
+                                          </Button>
+                                        </form>
+                                      </DialogContent>
+                                    </Dialog>
+                                  </div>
+                                ))
+                              ) : (
+                                <span className="text-xs text-muted-foreground">No cities assigned</span>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No niches created yet</p>
+                  )}
+                </div>
+
+                {/* Leads Section */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold">Leads</h3>
+                    <Dialog open={setupDialogs.lead} onOpenChange={(open) => setSetupDialogs({...setupDialogs, lead: open})}>
+                      <Button onClick={() => setSetupDialogs({...setupDialogs, lead: true})} size="sm" className="gap-2">
+                        <Plus className="w-4 h-4" />
+                        Add Lead
+                      </Button>
+                      <DialogContent className="max-w-md">
+                        <DialogHeader>
+                          <DialogTitle>Add Lead</DialogTitle>
+                          <DialogDescription>Create a new lead in a specific city</DialogDescription>
+                        </DialogHeader>
+                        <form onSubmit={async (e) => {
+                          e.preventDefault()
+                          if (!setupForms.leadName || !setupForms.selectedLeadNiche || !setupForms.selectedLeadCity) {
+                            toast({
+                              title: 'Error',
+                              description: 'Please fill all required fields',
+                              variant: 'destructive',
+                            })
+                            return
+                          }
+                          setSetupSaving(true)
+                          try {
+                            const detailsObj: Record<string, any> = {}
+                            if (setupForms.leadDetails?.trim()) {
+                              setupForms.leadDetails.split('\n').forEach((line) => {
+                                const trimmedLine = line.trim()
+                                if (!trimmedLine) return
+                                const [key, ...valueParts] = trimmedLine.split('=')
+                                if (key && key.trim() && valueParts.length > 0) {
+                                  const trimmedKey = key.trim()
+                                  const trimmedValue = valueParts.join('=').trim()
+                                  if (trimmedValue) {
+                                    detailsObj[trimmedKey] = trimmedValue
+                                  }
+                                }
+                              })
+                            }
+
+                            const leadData = {
+                              name: setupForms.leadName,
+                              ...detailsObj,
+                            }
+
+                            const { error } = await supabase
+                              .from('leads')
+                              .insert({
+                                niche_id: setupForms.selectedLeadNiche,
+                                city_id: setupForms.selectedLeadCity,
+                                data: leadData,
+                                created_by: localStorage.getItem('userId'),
+                              })
+                            if (error) throw error
+                            toast({
+                              title: 'Success',
+                              description: 'Lead added successfully',
+                            })
+                            setSetupForms({...setupForms, leadName: '', selectedLeadNiche: '', selectedLeadCity: '', leadDetails: ''})
+                            setSetupDialogs({...setupDialogs, lead: false})
+                            await Promise.all([refreshDashboard(), refreshAssignmentTab(), refreshLeadsTab(), refreshSetupTab()])
+                          } catch (error) {
+                            toast({
+                              title: 'Error',
+                              description: 'Failed to add lead',
+                              variant: 'destructive',
+                            })
+                          } finally {
+                            setSetupSaving(false)
+                          }
+                        }} className="space-y-5">
+                          <div>
+                            <Label htmlFor="lead-niche" className="mb-2 block">Select Niche</Label>
+                            <Select value={setupForms.selectedLeadNiche || ''} onValueChange={(value) => {
+                              setSetupForms({...setupForms, selectedLeadNiche: value, selectedLeadCity: ''})
+                            }}>
+                              <SelectTrigger id="lead-niche">
+                                <SelectValue placeholder="Choose a niche" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {niches.map(niche => (
+                                  <SelectItem key={niche.id} value={niche.id}>{niche.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label htmlFor="lead-city" className="mb-2 block">Select City</Label>
+                            <Select value={setupForms.selectedLeadCity || ''} onValueChange={(value) => setSetupForms({...setupForms, selectedLeadCity: value})}>
+                              <SelectTrigger id="lead-city">
+                                <SelectValue placeholder="Choose a city" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {cities.filter(c => c.niche_id === setupForms.selectedLeadNiche).map(city => (
+                                  <SelectItem key={city.id} value={city.id}>{city.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label htmlFor="lead-name" className="mb-2 block">Lead Name</Label>
+                            <Input
+                              id="lead-name"
+                              placeholder="e.g., John Doe"
+                              value={setupForms.leadName || ''}
+                              onChange={(e) => setSetupForms({...setupForms, leadName: e.target.value})}
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="lead-details" className="mb-2 block">Additional Details (Optional)</Label>
+                            <Input
+                              id="lead-details"
+                              placeholder="key=value format, one per line"
+                              value={setupForms.leadDetails || ''}
+                              onChange={(e) => setSetupForms({...setupForms, leadDetails: e.target.value})}
+                              className="h-20"
+                            />
+                          </div>
+                          <Button type="submit" disabled={setupSaving} className="w-full">
+                            {setupSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                            Add Lead
+                          </Button>
+                        </form>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{leads.length} leads created</p>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+
+        {/* Lead Details Dialog */}
+        <Dialog open={leadDetailsDialogOpen} onOpenChange={setLeadDetailsDialogOpen}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            {selectedLeadForDetails && (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="text-2xl">{selectedLeadForDetails.data?.name || 'Lead Details'}</DialogTitle>
+                  <DialogDescription className="flex items-center gap-2 mt-2">
+                    <Badge variant="outline">
+                      {selectedLeadForDetails.status || 'unassigned'}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">
+                      Created on {formatDate(selectedLeadForDetails.created_at)}
+                    </span>
+                  </DialogDescription>
+                </DialogHeader>
+
+                {/* Lead Data */}
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="font-semibold text-sm text-muted-foreground mb-3">Lead Information</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {selectedLeadForDetails.data && Object.keys(selectedLeadForDetails.data).length > 0 ? (
+                        <>
+                          {Object.entries(selectedLeadForDetails.data).map(([key, value]) => (
+                            <div key={key}>
+                              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                                {key.replace(/_/g, ' ')}
+                              </label>
+                              <p className="text-sm text-foreground mt-1 whitespace-pre-wrap">{String(value)}</p>
+                            </div>
+                          ))}
+                          {/* Add Niche */}
+                          {selectedLeadForDetails.niche_id && (
+                            <div>
+                              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                                Niche
+                              </label>
+                              <p className="text-sm text-foreground mt-1">
+                                {(() => {
+                                  const niche = niches.find(n => n.id === selectedLeadForDetails.niche_id)
+                                  return niche?.name || 'Unknown'
+                                })()}
+                              </p>
+                            </div>
+                          )}
+                          {/* Add City */}
+                          {selectedLeadForDetails.city_id && (
+                            <div>
+                              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                                City
+                              </label>
+                              <p className="text-sm text-foreground mt-1">
+                                {(() => {
+                                  const city = cities.find(c => c.id === selectedLeadForDetails.city_id)
+                                  return city?.name || 'Unknown'
+                                })()}
+                              </p>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted-foreground col-span-2">No lead details available</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Creator & Assignment Info */}
+                  <div className="border-t pt-4">
+                    <h3 className="font-semibold text-sm text-muted-foreground mb-3">Assignment Information</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Created By</p>
+                        <p className="mt-1">{selectedLeadForDetails.creator?.name || 'Unknown'}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assigned To</p>
+                        <p className="mt-1">
+                          {(() => {
+                            const assignment = cityAssignmentsData.find(
+                              (a: any) => a.city_id === selectedLeadForDetails.city_id
+                            )
+                            if (!assignment) return 'Unassigned'
+                            const caller = allUsers.find((u: any) => u.id === assignment.caller_id)
+                            return caller?.name || 'Unknown'
+                          })()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assigned By</p>
+                        <p className="mt-1">
+                          {(() => {
+                            const assignment = cityAssignmentsData.find(
+                              (a: any) => a.city_id === selectedLeadForDetails.city_id
+                            )
+                            if (!assignment) return '—'
+                            const manager = allUsers.find((u: any) => u.id === assignment.assigned_by)
+                            return manager?.name || 'Unknown'
+                          })()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Last Action</p>
+                        <div className="mt-1">
+                          {(() => {
+                            const response = leadResponses[selectedLeadForDetails.id]
+                            if (!response) return '—'
+                            if (response.action === 'approve') return <Badge variant="default" className="bg-green-600">✓ Approved</Badge>
+                            if (response.action === 'decline') return <Badge variant="destructive">✕ Declined</Badge>
+                            if (response.action === 'later') {
+                              const remaining = getRemainingDays(response.scheduled_for)
+                              return <span className="text-amber-600 text-xs font-medium">⏱ Later - {remaining === 0 ? 'Due' : remaining + ' days'}</span>
+                            }
+                            return '—'
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action/Response from Caller */}
+                  {leadResponses[selectedLeadForDetails.id] && leadResponses[selectedLeadForDetails.id].response_text && (
+                    <div className="border-t pt-4">
+                      <h3 className="font-semibold text-sm text-muted-foreground mb-2">Caller's Notes</h3>
+                      <p className="text-sm text-foreground bg-muted/50 p-3 rounded whitespace-pre-wrap">{leadResponses[selectedLeadForDetails.id].response_text}</p>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
+      </div>
+    </main>
+  )
+}

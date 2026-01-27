@@ -17,7 +17,16 @@ export async function POST(request: NextRequest) {
   try {
     // Validate input
     const body = await request.json()
-    const { password } = AdminLoginSchema.parse(body)
+    const validation = AdminLoginSchema.safeParse(body)
+    
+    if (!validation.success) {
+      return NextResponse.json(
+        { error: 'Validation error', details: validation.error.errors },
+        { status: 400 }
+      )
+    }
+    
+    const { password } = validation.data
 
     // Verify admin password
     if (password !== ADMIN_PASSWORD) {

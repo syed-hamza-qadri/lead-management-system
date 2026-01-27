@@ -13,6 +13,13 @@ export async function PATCH(request: NextRequest) {
     )
   }
 
+  if (password.length < 6) {
+    return NextResponse.json(
+      { error: 'Password must be at least 6 characters long' },
+      { status: 400 }
+    )
+  }
+
   const cookieStore = await cookies()
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

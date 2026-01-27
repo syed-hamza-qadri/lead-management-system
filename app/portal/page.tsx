@@ -21,6 +21,7 @@ interface User {
   id: string
   name: string
   email: string
+  role: string
 }
 
 export default function PortalPage() {
@@ -40,9 +41,24 @@ export default function PortalPage() {
   useEffect(() => {
     const sessionToken = localStorage.getItem('session_token')
     const sessionUser = localStorage.getItem('employee_user')
-    if (sessionToken && sessionUser) {
-      setUser(JSON.parse(sessionUser))
+    const userId = localStorage.getItem('userId')
+    
+    if (sessionToken && sessionUser && userId) {
+      const userData = JSON.parse(sessionUser)
+      setUser(userData)
       setIsLoggedIn(true)
+      
+      // Route based on role
+      const role = userData.role
+      if (role === 'admin') {
+        router.push('/admin')
+      } else if (role === 'manager') {
+        router.push('/portal/manager')
+      } else if (role === 'lead_generator') {
+        router.push('/portal/lead-generator')
+      } else if (role === 'caller') {
+        router.push('/portal/caller')
+      }
     } else {
       setLoading(false)
     }
@@ -105,8 +121,10 @@ export default function PortalPage() {
         return
       }
 
-      // Store only user data in localStorage (token is in HttpOnly cookie)
+      // Store user data and ID in localStorage
       localStorage.setItem('employee_user', JSON.stringify(data.user))
+      localStorage.setItem('userId', data.user.id)
+      localStorage.setItem('userName', data.user.name)
 
       toast({
         title: 'Login Successful',
@@ -117,6 +135,18 @@ export default function PortalPage() {
       setIsLoggedIn(true)
       setName('')
       setPassword('')
+      
+      // Route based on role
+      const role = data.user.role
+      if (role === 'admin') {
+        router.push('/admin')
+      } else if (role === 'manager') {
+        router.push('/portal/manager')
+      } else if (role === 'lead_generator') {
+        router.push('/portal/lead-generator')
+      } else if (role === 'caller') {
+        router.push('/portal/caller')
+      }
     } catch (error) {
       console.error('[v0] Login error:', error)
       toast({
@@ -140,6 +170,7 @@ export default function PortalPage() {
       console.error('Logout error:', error)
     } finally {
       localStorage.removeItem('employee_user')
+      localStorage.removeItem('userId')
       setUser(null)
       setIsLoggedIn(false)
       setNiches([])

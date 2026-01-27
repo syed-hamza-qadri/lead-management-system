@@ -35,7 +35,7 @@ export default function UserManagement() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [userToDelete, setUserToDelete] = useState<string | null>(null)
-  const [formData, setFormData] = useState({ name: '', email: '', role: 'employee' })
+  const [formData, setFormData] = useState({ name: '', email: '', role: 'caller' })
   const [newPassword, setNewPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [updatingPassword, setUpdatingPassword] = useState(false)
@@ -115,10 +115,10 @@ export default function UserManagement() {
       setTimeout(() => {
         toast({
           title: 'Important',
-          description: 'Share the temporary password with the employee',
+          description: 'Share the temporary password with the user',
         })
       }, 500)
-      setFormData({ name: '', email: '', role: 'employee' })
+      setFormData({ name: '', email: '', role: 'caller' })
       setOpenDialog(false)
       fetchUsers()
     } catch (error) {
@@ -166,7 +166,7 @@ export default function UserManagement() {
         title: 'Success',
         description: 'User updated successfully',
       })
-      setFormData({ name: '', email: '', role: 'employee' })
+      setFormData({ name: '', email: '', role: 'caller' })
       setEditingUserId(null)
       setOpenDialog(false)
       fetchUsers()
@@ -236,6 +236,15 @@ export default function UserManagement() {
       return
     }
 
+    if (newPassword.length < 6) {
+      toast({
+        title: 'Validation Error',
+        description: 'Password must be at least 6 characters',
+        variant: 'destructive',
+      })
+      return
+    }
+
     setUpdatingPassword(true)
     try {
       const response = await fetch('/api/admin/users/password', {
@@ -264,7 +273,7 @@ export default function UserManagement() {
       setTimeout(() => {
         toast({
           title: 'Important',
-          description: 'Share the new password with the employee',
+          description: 'Share the new password with the user',
         })
       }, 500)
 
@@ -307,8 +316,8 @@ export default function UserManagement() {
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div className="flex-1">
-            <h1 className="text-3xl font-bold text-foreground">Manage Employees</h1>
-            <p className="text-muted-foreground mt-2">Create, view, and manage employee accounts</p>
+            <h1 className="text-3xl font-bold text-foreground">Manage Users</h1>
+            <p className="text-muted-foreground mt-2">Create, view, and manage admin, manager, lead generator, and caller accounts</p>
           </div>
           <Dialog open={openDialog} onOpenChange={(open) => {
             setOpenDialog(open)
@@ -320,13 +329,13 @@ export default function UserManagement() {
             <DialogTrigger asChild>
               <Button className="flex items-center gap-2">
                 <Plus className="w-4 h-4" />
-                New Employee
+                New User
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>{editingUserId ? 'Edit Employee' : 'Add New Employee'}</DialogTitle>
-                <DialogDescription>{editingUserId ? 'Update employee information' : 'Create a new employee account'}</DialogDescription>
+                <DialogTitle>{editingUserId ? 'Edit User' : 'Add New User'}</DialogTitle>
+                <DialogDescription>{editingUserId ? 'Update user information' : 'Create a new user account with appropriate role'}</DialogDescription>
               </DialogHeader>
 
               <form onSubmit={handleCreateUser} className="space-y-4">
@@ -358,8 +367,10 @@ export default function UserManagement() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="employee">Employee</SelectItem>
-                      <SelectItem value="manager">Manager</SelectItem>
+                      <SelectItem value="admin">Admin - Full System Access</SelectItem>
+                      <SelectItem value="manager">Manager - Assign Callers & Leads</SelectItem>
+                      <SelectItem value="lead_generator">Lead Generator - Create Leads</SelectItem>
+                      <SelectItem value="caller">Caller - View Assigned Leads</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -371,7 +382,7 @@ export default function UserManagement() {
                       {editingUserId ? 'Updating...' : 'Creating...'}
                     </>
                   ) : (
-                    editingUserId ? 'Save Changes' : 'Create Employee'
+                    editingUserId ? 'Save Changes' : 'Create User'
                   )}
                 </Button>
               </form>
@@ -384,7 +395,7 @@ export default function UserManagement() {
           <CardContent className="p-0">
             {users.length === 0 ? (
               <div className="text-center py-12">
-                <p className="text-muted-foreground">No employees yet</p>
+                <p className="text-muted-foreground">No users yet</p>
               </div>
             ) : (
               <div className="overflow-x-auto">

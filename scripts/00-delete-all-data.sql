@@ -3,6 +3,10 @@
 -- Disables RLS temporarily to allow deletion
 
 -- Disable RLS temporarily for cleanup
+ALTER TABLE IF EXISTS role_access_log DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS city_assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS niche_assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS user_assignments DISABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS activity_log DISABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS lead_responses DISABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS leads DISABLE ROW LEVEL SECURITY;
@@ -11,6 +15,10 @@ ALTER TABLE IF EXISTS niches DISABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS users DISABLE ROW LEVEL SECURITY;
 
 -- Delete all data in order of foreign key dependencies
+DELETE FROM role_access_log;
+DELETE FROM city_assignments;
+DELETE FROM niche_assignments;
+DELETE FROM user_assignments;
 DELETE FROM activity_log;
 DELETE FROM lead_responses;
 DELETE FROM leads;
@@ -25,13 +33,16 @@ ALTER TABLE IF EXISTS cities ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS leads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS lead_responses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS activity_log ENABLE ROW LEVEL SECURITY;
-
-COMMIT;
-
-
--- To complete table delete
+ALTER TABLE IF EXISTS user_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS niche_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS city_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS role_access_log ENABLE ROW LEVEL SECURITY;
 
 -- Drop all tables in correct order (reverse of creation, respecting foreign keys)
+DROP TABLE IF EXISTS role_access_log CASCADE;
+DROP TABLE IF EXISTS city_assignments CASCADE;
+DROP TABLE IF EXISTS niche_assignments CASCADE;
+DROP TABLE IF EXISTS user_assignments CASCADE;
 DROP TABLE IF EXISTS sessions CASCADE;
 DROP TABLE IF EXISTS activity_log CASCADE;
 DROP TABLE IF EXISTS lead_responses CASCADE;

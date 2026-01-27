@@ -18,7 +18,16 @@ export async function POST(request: NextRequest) {
   try {
     // Validate input
     const body = await request.json()
-    const { name, password } = LoginSchema.parse(body)
+    const validation = LoginSchema.safeParse(body)
+    
+    if (!validation.success) {
+      return NextResponse.json(
+        { error: 'Validation error', details: validation.error.errors },
+        { status: 400 }
+      )
+    }
+    
+    const { name, password } = validation.data
 
     const cookieStore = await cookies()
     const supabase = createServerClient(
@@ -44,12 +53,12 @@ export async function POST(request: NextRequest) {
       }
     )
 
-    // Verify employee/manager credentials using name - allow both employee and manager roles
+    // Verify employee/manager credentials using name - allow all non-admin roles
     const { data: userData, error: userError } = await supabase
       .from('users')
       .select('id, name, email, password, role')
       .eq('name', name)
-      .in('role', ['employee', 'manager'])
+      .in('role', ['employee', 'manager', 'caller', 'lead_generator'])
 
     if (userError) throw userError
     

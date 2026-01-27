@@ -3,7 +3,7 @@ CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email TEXT UNIQUE NOT NULL,
   password TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'employee')), -- admin, manager or employee
+  role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'caller', 'lead_generator')), -- admin, manager, caller, or lead_generator
   name TEXT NOT NULL,
   is_active BOOLEAN DEFAULT true,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -36,6 +36,7 @@ CREATE TABLE leads (
   city_id UUID NOT NULL REFERENCES cities(id) ON DELETE CASCADE,
   data JSONB NOT NULL DEFAULT '{}', -- Flexible field for any lead data (name, phone, email, etc.)
   status TEXT DEFAULT 'unassigned' CHECK (status IN ('unassigned', 'approved', 'declined', 'scheduled')),
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
   assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -68,7 +69,7 @@ CREATE TABLE sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token TEXT UNIQUE NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'employee')),
+  role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'employee', 'caller', 'lead_generator')),
   expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -77,6 +78,7 @@ CREATE TABLE sessions (
 CREATE INDEX idx_cities_niche_id ON cities(niche_id);
 CREATE INDEX idx_leads_niche_id ON leads(niche_id);
 CREATE INDEX idx_leads_city_id ON leads(city_id);
+CREATE INDEX idx_leads_created_by ON leads(created_by);
 CREATE INDEX idx_leads_assigned_to ON leads(assigned_to);
 CREATE INDEX idx_lead_responses_lead_id ON lead_responses(lead_id);
 CREATE INDEX idx_lead_responses_employee_id ON lead_responses(employee_id);
