@@ -58,8 +58,12 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    // Return session info WITHOUT the actual token (token stays in HttpOnly cookie)
     return NextResponse.json({
-      session: data,
+      user_id: data.user_id,
+      user_name: data.users?.name || 'Unknown',
+      user_email: data.users?.email || '',
+      user_role: data.users?.role || 'caller',
     })
   } catch (error) {
     console.error('[v0] Error validating session:', error)

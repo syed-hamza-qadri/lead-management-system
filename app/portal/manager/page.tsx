@@ -658,14 +658,13 @@ export default function ManagerPortal() {
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/sessions/validate', {
+      await fetch('/api/sessions', {
         method: 'DELETE',
+        credentials: 'include',
       })
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
-      localStorage.removeItem('employee_user')
-      localStorage.removeItem('userId')
       toast({
         title: 'Logged Out',
         description: 'You have been logged out successfully',

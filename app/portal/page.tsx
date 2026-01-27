@@ -37,31 +37,44 @@ export default function PortalPage() {
   const [loginError, setLoginError] = useState('')
   const supabase = getSupabaseClient()
 
-  // Check if user is already logged in
+  // Check if user is already logged in using server-side session
   useEffect(() => {
-    const sessionToken = localStorage.getItem('session_token')
-    const sessionUser = localStorage.getItem('employee_user')
-    const userId = localStorage.getItem('userId')
-    
-    if (sessionToken && sessionUser && userId) {
-      const userData = JSON.parse(sessionUser)
-      setUser(userData)
-      setIsLoggedIn(true)
-      
-      // Route based on role
-      const role = userData.role
-      if (role === 'admin') {
-        router.push('/admin')
-      } else if (role === 'manager') {
-        router.push('/portal/manager')
-      } else if (role === 'lead_generator') {
-        router.push('/portal/lead-generator')
-      } else if (role === 'caller') {
-        router.push('/portal/caller')
+    const validateAndRoute = async () => {
+      try {
+        const response = await fetch('/api/sessions/validate', {
+          credentials: 'include',
+        })
+
+        if (response.ok) {
+          const sessionData = await response.json()
+          setUser({
+            id: sessionData.user_id,
+            name: sessionData.user_name,
+            email: sessionData.user_email,
+            role: sessionData.user_role,
+          })
+          setIsLoggedIn(true)
+
+          // Route based on role
+          if (sessionData.user_role === 'admin') {
+            router.push('/admin')
+          } else if (sessionData.user_role === 'manager') {
+            router.push('/portal/manager')
+          } else if (sessionData.user_role === 'lead_generator') {
+            router.push('/portal/lead-generator')
+          } else if (sessionData.user_role === 'caller') {
+            router.push('/portal/caller')
+          }
+        } else {
+          setLoading(false)
+        }
+      } catch (error) {
+        console.error('[Portal] Session validation error:', error)
+        setLoading(false)
       }
-    } else {
-      setLoading(false)
     }
+
+    validateAndRoute()
   }, [])
 
   useEffect(() => {
@@ -121,11 +134,8 @@ export default function PortalPage() {
         return
       }
 
-      // Store user data and ID in localStorage
-      localStorage.setItem('employee_user', JSON.stringify(data.user))
-      localStorage.setItem('userId', data.user.id)
-      localStorage.setItem('userName', data.user.name)
-
+      // User data is now managed only via HttpOnly cookie
+      // No need to store in localStorage
       toast({
         title: 'Login Successful',
         description: `Welcome, ${data.user.name}!`,
@@ -163,14 +173,13 @@ export default function PortalPage() {
   const handleLogout = async () => {
     try {
       // Token is in HttpOnly cookie, automatically sent with request
-      await fetch('/api/sessions/validate', {
+      await fetch('/api/sessions', {
         method: 'DELETE',
+        credentials: 'include',
       })
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
-      localStorage.removeItem('employee_user')
-      localStorage.removeItem('userId')
       setUser(null)
       setIsLoggedIn(false)
       setNiches([])
