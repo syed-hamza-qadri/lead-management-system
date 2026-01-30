@@ -20,6 +20,7 @@ interface Lead {
 
 interface LeadWithSchedule extends Lead {
   daysRemaining?: number
+  was_later?: boolean  // Track if lead was previously scheduled
 }
 
 export default function LeadList() {
@@ -88,6 +89,7 @@ export default function LeadList() {
       const enrichedLeads = (data || []).map((lead: any) => {
         const scheduledFor = scheduledMap.get(lead.id)
         let daysRemaining = 0
+        let wasLater = false
 
         if (lead.status === 'scheduled' && scheduledFor) {
           const scheduledDate = new Date(scheduledFor)
@@ -103,20 +105,28 @@ export default function LeadList() {
               .update({ status: 'unassigned' })
               .eq('id', lead.id)
               .then()
-            return { ...lead, status: 'unassigned', daysRemaining: 0 }
+            wasLater = true  // Mark that this was previously scheduled
+            return { ...lead, status: 'unassigned', daysRemaining: 0, was_later: true }
           }
         }
 
-        return { ...lead, scheduled_for: scheduledFor, daysRemaining }
+        return { ...lead, scheduled_for: scheduledFor, daysRemaining, was_later: wasLater }
       })
 
-      // Sort: scheduled leads by days remaining first, then by creation date
+      // Sort: was_later leads first (top), then scheduled by days remaining, then by creation date
       const sorted = enrichedLeads.sort((a: any, b: any) => {
+        // Leads that were previously scheduled come first
+        if (a.was_later && !b.was_later) return -1
+        if (!a.was_later && b.was_later) return 1
+        
+        // Then scheduled leads by days remaining
         if (a.status === 'scheduled' && b.status !== 'scheduled') return -1
         if (a.status !== 'scheduled' && b.status === 'scheduled') return 1
         if (a.status === 'scheduled' && b.status === 'scheduled') {
           return (a.daysRemaining || 999) - (b.daysRemaining || 999)
         }
+        
+        // Then by creation date (newest first)
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       })
 
@@ -138,7 +148,10 @@ export default function LeadList() {
     }
   }, [cityId, supabase])
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: string, was_later?: boolean) => {
+    if (was_later && status === 'unassigned') {
+      return 'bg-purple-100 text-purple-700 border-purple-200'  // Purple for "Later - Unassigned"
+    }
     const colors: Record<string, string> = {
       unassigned: 'bg-emerald-100 text-emerald-700 border-emerald-200',
       approved: 'bg-blue-100 text-blue-700 border-blue-200',
@@ -202,9 +215,12 @@ export default function LeadList() {
               </div>
               <Badge 
                 variant="outline" 
-                className={`text-xs px-2 py-1 font-semibold whitespace-nowrap border ${getStatusColor(lead.status)}`}
+                className={`text-xs px-2 py-1 font-semibold whitespace-nowrap border ${getStatusColor(lead.status, lead.was_later)}`}
               >
-                {lead.status.charAt(0).toUpperCase() + lead.status.slice(1)}
+                {lead.was_later && lead.status === 'unassigned' 
+                  ? 'Later - Unassigned' 
+                  : lead.status.charAt(0).toUpperCase() + lead.status.slice(1)
+                }
               </Badge>
             </div>
 
@@ -250,7 +266,7 @@ export default function LeadList() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.back()}
+            onClick={() => router.push('/portal/caller')}
             className="h-10 w-10 p-0"
           >
             <ArrowLeft className="w-4 h-4" />

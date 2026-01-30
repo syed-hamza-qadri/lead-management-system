@@ -535,7 +535,7 @@ export default function LeadDetail() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.back()}
+            onClick={() => cityId && router.push(`/portal/city/${cityId}`)}
             className="mb-4 text-muted-foreground hover:text-foreground"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />

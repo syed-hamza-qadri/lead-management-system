@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Loader2, ChevronRight, LogOut } from 'lucide-react'
+import { Loader2, ChevronRight, LogOut, BarChart3 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
 interface Lead {
@@ -53,6 +53,19 @@ export default function CallerPortal() {
   const [selectedCity, setSelectedCity] = useState<string>('')
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  
+  // Performance metrics
+  const [performanceOpen, setPerformanceOpen] = useState(false)
+  const [performance, setPerformance] = useState({ 
+    totalNiches: 0,
+    totalCities: 0,
+    assigned: 0, 
+    approved: 0, 
+    declined: 0, 
+    scheduled: 0, 
+    pending: 0,
+    conversionRate: 0
+  })
 
   const [actionStatus, setActionStatus] = useState('')
   const [responseNotes, setResponseNotes] = useState('')
@@ -109,6 +122,41 @@ export default function CallerPortal() {
       setNiches(typedNiches)
       setCities(typedCities)
       setLeads(leadsData)
+      
+      // Calculate performance metrics for this caller
+      let approved = 0, declined = 0, scheduled = 0, pending = 0
+      const leadsWithAction = new Set<string>()
+      
+      // Get all responses for this caller's leads
+      const leadIds = leadsData.map((l: any) => l.id)
+      if (leadIds.length > 0) {
+        const { data: responses } = await supabase
+          .from('lead_responses')
+          .select('lead_id, action')
+          .in('lead_id', leadIds)
+          .eq('employee_id', session.user_id)
+        
+        ;(responses || []).forEach((r: any) => {
+          leadsWithAction.add(r.lead_id)
+          if (r.action === 'approve') approved++
+          else if (r.action === 'decline') declined++
+          else if (r.action === 'later') scheduled++
+        })
+      }
+      
+      pending = leadsData.length - leadsWithAction.size
+      const conversionRate = leadsData.length > 0 ? Math.round((approved / leadsData.length) * 100) : 0
+      
+      setPerformance({
+        totalNiches: typedNiches.length,
+        totalCities: typedCities.length,
+        assigned: leadsData.length,
+        approved,
+        declined,
+        scheduled,
+        pending,
+        conversionRate
+      })
     } catch (error) {
       console.error('Error fetching data:', error)
       toast({
@@ -231,10 +279,16 @@ export default function CallerPortal() {
             <h1 className="text-3xl font-bold text-foreground">Your Leads</h1>
             <p className="text-muted-foreground mt-2">Welcome, {session?.user_name}. Select a niche to view available leads</p>
           </div>
-          <Button variant="outline" onClick={handleLogout} className="flex items-center gap-2">
-            <LogOut className="w-4 h-4" />
-            Logout
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setPerformanceOpen(true)} className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4" />
+              STATUS
+            </Button>
+            <Button variant="outline" onClick={handleLogout} className="flex items-center gap-2">
+              <LogOut className="w-4 h-4" />
+              Logout
+            </Button>
+          </div>
         </div>
 
         {/* Niches Section - Card View */}
@@ -310,6 +364,56 @@ export default function CallerPortal() {
         )}
 
         {/* Leads Section removed - users navigate via /portal/city/[id] */}
+
+        {/* Performance Dialog */}
+        <Dialog open={performanceOpen} onOpenChange={setPerformanceOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Your Performance Metrics</DialogTitle>
+              <DialogDescription>Overview of your performance and capacity</DialogDescription>
+            </DialogHeader>
+            
+            <Card className="bg-gradient-to-br from-card to-muted/20">
+              <CardHeader className="pb-1">
+                <CardTitle className="text-base">{session?.user_name}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm pt-0">
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Total Niches:</span>
+                  <Badge variant="secondary">{performance.totalNiches}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Total Cities:</span>
+                  <Badge variant="secondary">{performance.totalCities}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Leads in Territory:</span>
+                  <Badge variant="outline">{performance.assigned || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Approved:</span>
+                  <Badge className="bg-green-100 text-green-700">{performance.approved || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Declined:</span>
+                  <Badge className="bg-red-100 text-red-700">{performance.declined || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Scheduled:</span>
+                  <Badge variant="outline">{performance.scheduled || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Pending:</span>
+                  <Badge className="bg-yellow-100 text-yellow-700">{performance.pending || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t border-border">
+                  <span className="font-semibold">Conversion Rate:</span>
+                  <Badge className="bg-gray-100 text-gray-900">{performance.conversionRate}%</Badge>
+                </div>
+              </CardContent>
+            </Card>
+          </DialogContent>
+        </Dialog>
 
         {/* Lead Details Dialog */}
         <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
