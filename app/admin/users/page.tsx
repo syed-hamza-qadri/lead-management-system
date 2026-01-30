@@ -5,6 +5,7 @@ import React from "react"
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
+import { useSession } from '@/lib/session'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,6 +28,7 @@ interface User {
 export default function UserManagement() {
   const router = useRouter()
   const { toast } = useToast()
+  const { session, loading: sessionLoading } = useSession()
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
@@ -43,8 +45,22 @@ export default function UserManagement() {
   const supabase = getSupabaseClient()
 
   useEffect(() => {
-    fetchUsers()
-  }, [supabase])
+    if (!sessionLoading && !session) {
+      router.push('/')
+      return
+    }
+    if (sessionLoading) return
+    
+    // Check if user role is admin
+    if (session && session.user_role !== 'admin') {
+      router.push('/')
+      return
+    }
+
+    if (session?.user_role === 'admin') {
+      fetchUsers()
+    }
+  }, [session, sessionLoading, router])
 
   const fetchUsers = async () => {
     try {
@@ -52,6 +68,7 @@ export default function UserManagement() {
         .from('users')
         .select('*')
         .order('created_at', { ascending: false })
+        .limit(500)  // Pagination limit for performance
 
       if (error) throw error
       setUsers(data || [])

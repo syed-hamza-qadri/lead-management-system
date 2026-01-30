@@ -103,7 +103,8 @@ export default function LeadGenerator() {
 
       setNiches(nichesData || [])
       setCities(citiesData || [])
-      setLeads(leadsData || [])
+      // Limit leads to first 100 for initial load (pagination)
+      setLeads((leadsData || []).slice(0, 100))
     } catch (error) {
       console.error('Error fetching data:', error)
       toast({

@@ -96,9 +96,8 @@ export async function POST(request: NextRequest) {
       throw new Error('Failed to get or create admin user')
     }
 
-    // Create session for admin
+    // Create session for admin with minimal required data
     const sessionUrl = new URL('/api/sessions', request.nextUrl.origin).toString()
-    console.log('Admin creating session at:', sessionUrl)
     const sessionResponse = await fetch(
       sessionUrl,
       {
@@ -107,6 +106,7 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           userId: adminUser.id,
           role: 'admin',
+          userName: adminUser.name,
         }),
       }
     )

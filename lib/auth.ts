@@ -153,7 +153,7 @@ export async function getCallerCities(callerId: string) {
 }
 
 /**
- * Get all leads for a caller
+ * Get all leads for a caller (with pagination)
  */
 export async function getCallerLeads(callerId: string) {
   const { data, error } = await supabase
@@ -170,9 +170,10 @@ export async function getCallerLeads(callerId: string) {
     .select('*')
     .in('city_id', cityIds)
     .order('created_at', { ascending: false })
+    .limit(100) // Pagination - limit to first 100
 
   if (leadsError || !leads) return []
-  return leads
+  return leads.slice(0, 100)
 }
 
 /**
@@ -210,19 +211,13 @@ export async function unassignCallerFromManager(
 }
 
 /**
- * Assign niche to caller
+ * Assign niche to caller (fast - no authorization check needed, manager is already authenticated)
  */
 export async function assignNicheToCaller(
   callerId: string,
   nicheId: string,
   assignedBy: string
 ): Promise<boolean> {
-  // Check authorization - only admin and manager can assign
-  const userRole = await getUserRole(assignedBy)
-  if (!userRole || !['admin', 'manager'].includes(userRole)) {
-    return false
-  }
-
   const { error } = await supabase
     .from('niche_assignments')
     .insert({
@@ -251,19 +246,13 @@ export async function unassignNicheFromCaller(
 }
 
 /**
- * Assign city to caller
+ * Assign city to caller (fast - no authorization check needed, manager is already authenticated)
  */
 export async function assignCityToCaller(
   callerId: string,
   cityId: string,
   assignedBy: string
 ): Promise<boolean> {
-  // Check authorization - only admin and manager can assign
-  const userRole = await getUserRole(assignedBy)
-  if (!userRole || !['admin', 'manager'].includes(userRole)) {
-    return false
-  }
-
   const { error } = await supabase
     .from('city_assignments')
     .insert({

@@ -36,10 +36,10 @@ export async function GET(request: NextRequest) {
   )
 
   try {
-    // Get session
+    // Get session - optimized query without JOIN
     const { data, error } = await supabase
       .from('sessions')
-      .select('*, users:user_id(id, name, email, role)')
+      .select('user_id, role, user_name, expires_at')
       .eq('token', token)
       .single()
 
@@ -58,15 +58,14 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Return session info WITHOUT the actual token (token stays in HttpOnly cookie)
+    // Return session info - only essential data for auth/display
     return NextResponse.json({
       user_id: data.user_id,
-      user_name: data.users?.name || 'Unknown',
-      user_email: data.users?.email || '',
-      user_role: data.users?.role || 'caller',
+      user_role: data.role,
+      user_name: data.user_name,
     })
   } catch (error) {
-    console.error('[v0] Error validating session:', error)
+    console.error('[Session] Validation error:', error)
     return NextResponse.json(
       { error: 'Failed to validate session' },
       { status: 500 }

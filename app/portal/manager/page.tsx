@@ -201,10 +201,13 @@ export default function ManagerPortal() {
       // Fetch all niches and cities
       const { data: nichesData } = await supabase.from('niches').select('*').order('name') as any
       const { data: citiesData } = await supabase.from('cities').select('*').order('name') as any
+      
+      // Fetch limited leads for initial display (pagination)
       const { data: leadsData, error: leadsError } = await supabase
         .from('leads')
         .select('*, creator:created_by(id, name)')
-        .order('created_at', { ascending: false }) as any
+        .order('created_at', { ascending: false })
+        .limit(100) as any
 
       if (leadsError) {
         console.error('Error fetching leads:', leadsError)
@@ -214,100 +217,99 @@ export default function ManagerPortal() {
       setCities((citiesData || []) as City[])
       setLeads((leadsData || []) as Lead[])
 
-      // Fetch all city assignments with caller and assigned_by user info
+      // Fetch all assignments in batch (not per-caller)
+      const { data: allNicheAssignments } = await supabase
+        .from('niche_assignments')
+        .select('caller_id, niches(id, name)')
+        .in('caller_id', callersToDisplay.map(c => c.id)) as any
+
       const { data: allCityAssignments } = await supabase
         .from('city_assignments')
-        .select('city_id, caller_id, assigned_by')
-        .order('created_at', { ascending: false }) as any
+        .select('caller_id, assigned_by, city_id, cities(id, name)')
+        .in('caller_id', callersToDisplay.map(c => c.id)) as any
       
       setCityAssignmentsData(allCityAssignments || [])
 
-      // Fetch all lead responses to show actions
+      // Fetch all lead responses once (not per-caller) - limited to recent 1000
       const { data: allLeadResponses } = await supabase
         .from('lead_responses')
-        .select('lead_id, action, scheduled_for, created_at, response_text')
-        .order('created_at', { ascending: false }) as any
+        .select('lead_id, action, employee_id')
+        .order('created_at', { ascending: false })
+        .limit(1000) as any
 
-      // Create a map of lead_id to latest response
-      const responseMap: { [leadId: string]: any } = {}
-      ;(allLeadResponses || []).forEach((response: any) => {
-        if (!responseMap[response.lead_id]) {
-          responseMap[response.lead_id] = response
+      // Create maps for quick lookup instead of iterating
+      const nicheMapByCallerId = new Map<string, Niche[]>()
+      const cityMapByCallerId = new Map<string, City[]>()
+      const responseMapByLeadAndCaller = new Map<string, Map<string, string[]>>()
+
+      // Build lookup maps
+      ;(allNicheAssignments || []).forEach((assignment: any) => {
+        if (!nicheMapByCallerId.has(assignment.caller_id)) {
+          nicheMapByCallerId.set(assignment.caller_id, [])
         }
+        nicheMapByCallerId.get(assignment.caller_id)!.push(assignment.niches)
       })
-      setLeadResponses(responseMap)
 
-      // Fetch assignments for each caller that will be displayed
-      for (const caller of callersToDisplay) {
-        const { data: nicheAssignments } = await supabase
-          .from('niche_assignments')
-          .select('niches(id, name)')
-          .eq('caller_id', caller.id) as any
-
-        const { data: cityAssignments } = await supabase
-          .from('city_assignments')
-          .select('cities(id, name)')
-          .eq('caller_id', caller.id) as any
-
-        // Get all city IDs assigned to this caller
-        const assignedCityIds = (cityAssignments?.map((ca: any) => ca.cities?.id) || []).filter(Boolean)
-
-        // Fetch all leads in the cities assigned to this caller
-        let leadsInAssignedCities: any[] = []
-        if (assignedCityIds.length > 0) {
-          const { data: citiesLeads } = await supabase
-            .from('leads')
-            .select('id')
-            .in('city_id', assignedCityIds) as any
-          leadsInAssignedCities = citiesLeads || []
+      ;(allCityAssignments || []).forEach((assignment: any) => {
+        if (!cityMapByCallerId.has(assignment.caller_id)) {
+          cityMapByCallerId.set(assignment.caller_id, [])
         }
+        cityMapByCallerId.get(assignment.caller_id)!.push(assignment.cities)
+      })
 
-        // Get lead IDs for this caller
-        const leadsInCitiesIds = leadsInAssignedCities.map(l => l.id)
+      ;(allLeadResponses || []).forEach((response: any) => {
+        const key = `${response.lead_id}-${response.employee_id}`
+        if (!responseMapByLeadAndCaller.has(response.lead_id)) {
+          responseMapByLeadAndCaller.set(response.lead_id, new Map())
+        }
+        if (!responseMapByLeadAndCaller.get(response.lead_id)!.has(response.employee_id)) {
+          responseMapByLeadAndCaller.get(response.lead_id)!.set(response.employee_id, [])
+        }
+        responseMapByLeadAndCaller.get(response.lead_id)!.get(response.employee_id)!.push(response.action)
+      })
 
-        // Fetch responses only for leads in assigned cities
-        const { data: responses } = await supabase
-          .from('lead_responses')
-          .select('lead_id, action')
-          .in('lead_id', leadsInCitiesIds.length > 0 ? leadsInCitiesIds : ['']) as any
+      // Calculate performance metrics using maps (no additional queries)
+      const performanceData = new Map<string, CallerPerformance>()
+      
+      for (const caller of callersToDisplay) {
+        const callerCities = cityMapByCallerId.get(caller.id) || []
+        const assignedCityIds = callerCities.map(c => c.id)
+        
+        const leadsInCities = (leadsData || []).filter((l: any) => assignedCityIds.includes(l.city_id))
+        const leadsWithAction = new Set<string>()
+        let approved = 0, declined = 0, scheduled = 0
 
-        // Count actions per lead
-        const leadsWithActions = new Set<string>()
-        let approved = 0
-        let declined = 0
-        let scheduled = 0
-
-        ;(responses || []).forEach((response: any) => {
-          leadsWithActions.add(response.lead_id)
-          if (response.action === 'approve') approved++
-          else if (response.action === 'decline') declined++
-          else if (response.action === 'later') scheduled++
+        leadsInCities.forEach((lead: any) => {
+          const callerResponses = responseMapByLeadAndCaller.get(lead.id)?.get(caller.id) || []
+          if (callerResponses.length > 0) {
+            leadsWithAction.add(lead.id)
+            if (callerResponses.includes('approve')) approved++
+            if (callerResponses.includes('decline')) declined++
+            if (callerResponses.includes('later')) scheduled++
+          }
         })
 
-        // Pending leads = total leads in assigned cities - leads with any action
-        const pending = leadsInCitiesIds.length - leadsWithActions.size
-
-        setCallerPerformance(prev => ({
-          ...prev,
-          [caller.id]: {
-            assigned: leadsInCitiesIds.length,
-            approved,
-            declined,
-            scheduled,
-            pending
-          }
-        }))
+        performanceData.set(caller.id, {
+          assigned: leadsInCities.length,
+          approved,
+          declined,
+          scheduled,
+          pending: leadsInCities.length - leadsWithAction.size
+        })
 
         setCallerNiches(prev => ({
           ...prev,
-          [caller.id]: (nicheAssignments?.map((na: any) => na.niches) || []) as Niche[]
+          [caller.id]: nicheMapByCallerId.get(caller.id) || []
         }))
 
         setCallerCities(prev => ({
           ...prev,
-          [caller.id]: (cityAssignments?.map((ca: any) => ca.cities) || []) as City[]
+          [caller.id]: callerCities
         }))
       }
+
+      // Batch set performance data
+      setCallerPerformance(Object.fromEntries(performanceData))
     } catch (error) {
       console.error('Error fetching data:', error)
       toast({
@@ -589,7 +591,7 @@ export default function ManagerPortal() {
     const citySelectorKey = Object.keys(pendingCitySelections).find(key => key.startsWith(nicheId + '-'))
     const cityId = citySelectorKey ? pendingCitySelections[citySelectorKey] : pendingCitySelections[nicheId]
     const callerId = pendingCallerSelections[nicheId]
-    const userId = localStorage.getItem('userId')
+    const userId = session?.user_id
     
     if (!callerId || !cityId || !userId) {
       toast({
@@ -621,11 +623,11 @@ export default function ManagerPortal() {
       }
 
       // Assign niche
-      const nicheSuccess = await assignNicheToCaller(callerId, nicheId, userId)
+      const nicheSuccess = await assignNicheToCaller(callerId, nicheId, session?.user_id || '')
       if (!nicheSuccess) throw new Error('Failed to assign niche')
 
       // Assign city
-      const citySuccess = await assignCityToCaller(callerId, cityId, userId)
+      const citySuccess = await assignCityToCaller(callerId, cityId, session?.user_id || '')
       if (!citySuccess) throw new Error('Failed to assign city')
 
       toast({
@@ -960,7 +962,7 @@ export default function ManagerPortal() {
                                       setPendingCallerSelections(prev => ({ ...prev, [cardKey]: callerId }))
                                       
                                       // Auto-assign when caller is selected
-                                      const userId = localStorage.getItem('userId')
+                                      const userId = session?.user_id
                                       if (!callerId || !userId) {
                                         toast({
                                           title: 'Error',
@@ -1110,7 +1112,7 @@ export default function ManagerPortal() {
                                       if (!assignedCallerForCity) return
                                       
                                       const oldCallerId = assignedCallerForCity.id
-                                      const userId = localStorage.getItem('userId')
+                                      const userId = session?.user_id
                                       
                                       if (!newCallerId || !userId) {
                                         toast({
@@ -1886,7 +1888,7 @@ export default function ManagerPortal() {
                                 niche_id: setupForms.selectedLeadNiche,
                                 city_id: setupForms.selectedLeadCity,
                                 data: leadData,
-                                created_by: localStorage.getItem('userId'),
+                                created_by: session?.user_id,
                               })
                             if (error) throw error
                             toast({

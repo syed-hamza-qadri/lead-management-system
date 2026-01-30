@@ -83,9 +83,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Create session in database
+    // Create session in database with minimal required data
     const sessionUrl = new URL('/api/sessions', request.nextUrl.origin).toString()
-    console.log('[v0] Creating session at:', sessionUrl)
     const sessionResponse = await fetch(
       sessionUrl,
       {
@@ -96,6 +95,7 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           userId: user.id,
           role: user.role,
+          userName: user.name,
         }),
       }
     )

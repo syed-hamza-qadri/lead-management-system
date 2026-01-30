@@ -57,63 +57,70 @@ export default function LeadList() {
         setCityName(cityData?.name || '')
         setNicheName(cityData?.niches?.name || '')
 
-        // Get leads for this city
-        const { data, error } = await supabase
-          .from('leads')
-          .select('id, data, status, created_at')
-          .eq('city_id', cityId)
-          .order('created_at', { ascending: false })
+      // Get leads for this city
+      const { data, error } = await supabase
+        .from('leads')
+        .select('id, data, status, created_at')
+        .eq('city_id', cityId)
+        .order('created_at', { ascending: false })
+        .limit(100) // Add pagination
 
-        if (error) throw error
+      if (error) throw error
 
-        // Enrich leads with scheduled_for data
-        const enrichedLeads = await Promise.all(
-          (data || []).map(async (lead: any) => {
-            // Get latest scheduled_for from lead_responses if status is scheduled
-            if (lead.status === 'scheduled') {
-              const { data: responseData } = await supabase
-                .from('lead_responses')
-                .select('scheduled_for')
-                .eq('lead_id', lead.id)
-                .eq('action', 'later')
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .single()
+      // Fetch all scheduled_for data in one query instead of per-lead
+      const leadIds = (data || []).map((l: any) => l.id)
+      const { data: responseData } = await supabase
+        .from('lead_responses')
+        .select('lead_id, scheduled_for, action')
+        .in('lead_id', leadIds.length > 0 ? leadIds : [''])
+        .eq('action', 'later')
+        .order('created_at', { ascending: false })
 
-              if (responseData?.scheduled_for) {
-                const scheduledDate = new Date(responseData.scheduled_for)
-                const today = new Date()
-                today.setHours(0, 0, 0, 0)
-                scheduledDate.setHours(0, 0, 0, 0)
-                const daysRemaining = Math.ceil((scheduledDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-                
-                // If scheduled date has passed, move back to unassigned
-                if (daysRemaining <= 0) {
-                  await supabase
-                    .from('leads')
-                    .update({ status: 'unassigned' })
-                    .eq('id', lead.id)
-                  return { ...lead, status: 'unassigned', daysRemaining: 0 }
-                }
+      // Create lookup map for quick access
+      const scheduledMap = new Map<string, string>()
+      ;(responseData || []).forEach((response: any) => {
+        if (!scheduledMap.has(response.lead_id)) {
+          scheduledMap.set(response.lead_id, response.scheduled_for)
+        }
+      })
 
-                return { ...lead, scheduled_for: responseData.scheduled_for, daysRemaining }
-              }
-            }
-            return lead
-          })
-        )
+      // Enrich leads using map (no additional queries)
+      const enrichedLeads = (data || []).map((lead: any) => {
+        const scheduledFor = scheduledMap.get(lead.id)
+        let daysRemaining = 0
 
-        // Sort: scheduled leads by days remaining first, then by creation date
-        const sorted = enrichedLeads.sort((a, b) => {
-          if (a.status === 'scheduled' && b.status !== 'scheduled') return -1
-          if (a.status !== 'scheduled' && b.status === 'scheduled') return 1
-          if (a.status === 'scheduled' && b.status === 'scheduled') {
-            return (a.daysRemaining || 999) - (b.daysRemaining || 999)
+        if (lead.status === 'scheduled' && scheduledFor) {
+          const scheduledDate = new Date(scheduledFor)
+          const today = new Date()
+          today.setHours(0, 0, 0, 0)
+          scheduledDate.setHours(0, 0, 0, 0)
+          daysRemaining = Math.ceil((scheduledDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+          
+          // If scheduled date has passed, update status
+          if (daysRemaining <= 0) {
+            supabase
+              .from('leads')
+              .update({ status: 'unassigned' })
+              .eq('id', lead.id)
+              .then()
+            return { ...lead, status: 'unassigned', daysRemaining: 0 }
           }
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        })
+        }
 
-        setLeads(sorted)
+        return { ...lead, scheduled_for: scheduledFor, daysRemaining }
+      })
+
+      // Sort: scheduled leads by days remaining first, then by creation date
+      const sorted = enrichedLeads.sort((a: any, b: any) => {
+        if (a.status === 'scheduled' && b.status !== 'scheduled') return -1
+        if (a.status !== 'scheduled' && b.status === 'scheduled') return 1
+        if (a.status === 'scheduled' && b.status === 'scheduled') {
+          return (a.daysRemaining || 999) - (b.daysRemaining || 999)
+        }
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      })
+
+      setLeads(sorted)
       } catch (error) {
         console.error('[v0] Error fetching leads:', error)
         toast({

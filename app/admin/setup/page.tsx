@@ -4,6 +4,7 @@ import React from "react"
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
+import { useSession } from '@/lib/session'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,12 +41,31 @@ export default function SetupPage() {
   const router = useRouter()
   const { toast } = useToast()
   const supabase = getSupabaseClient()
+  const { session, loading: sessionLoading } = useSession()
 
   // Niche States
   const [niches, setNiches] = useState<Niche[]>([])
   const [cities, setCities] = useState<City[]>([])
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!sessionLoading && !session) {
+      router.push('/')
+      return
+    }
+    if (sessionLoading) return
+    
+    // Check if user role is admin
+    if (session && session.user_role !== 'admin') {
+      router.push('/')
+      return
+    }
+
+    if (session?.user_role === 'admin') {
+      fetchData()
+    }
+  }, [session, sessionLoading, router])
 
   // Dialog States
   const [nicheDialog, setNicheDialog] = useState(false)
@@ -88,7 +108,7 @@ export default function SetupPage() {
       const [nicheRes, cityRes, leadRes] = await Promise.all([
         supabase.from('niches').select('*').order('name'),
         supabase.from('cities').select('*').order('name'),
-        supabase.from('leads').select('*').order('created_at', { ascending: false }),
+        supabase.from('leads').select('*').order('created_at', { ascending: false }).limit(100), // Pagination
       ])
 
       setNiches(nicheRes.data || [])
@@ -105,7 +125,7 @@ export default function SetupPage() {
         setCities(enrichedCities)
       }
 
-      setLeads(leadRes.data || [])
+      setLeads((leadRes.data || []).slice(0, 100)) // Ensure max 100 leads
     } catch (error) {
       console.error('[v0] Error fetching data:', error)
     } finally {
@@ -113,9 +133,7 @@ export default function SetupPage() {
     }
   }
 
-  useEffect(() => {
-    fetchData()
-  }, [supabase])
+  // fetchData is already called in the session validation useEffect above
 
   const handleAddNiche = async (e: React.FormEvent) => {
     e.preventDefault()

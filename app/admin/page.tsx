@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
+import { useSession } from '@/lib/session'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -32,10 +33,10 @@ interface User {
 
 export default function AdminDashboard() {
   const router = useRouter()
+  const { session, loading: sessionLoading } = useSession()
   const [activities, setActivities] = useState<ActivityLog[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [stats, setStats] = useState({ total_leads: 0, total_responses: 0, active_users: 0 })
   const [selectedActivity, setSelectedActivity] = useState<ActivityLog | null>(null)
   const [showDialog, setShowDialog] = useState(false)
@@ -44,123 +45,109 @@ export default function AdminDashboard() {
   const logsPerPage = 20
   const supabase = getSupabaseClient()
 
+  const fetchData = async () => {
+    try {
+      if (!session?.user_id) return
+      // Fetch activity logs with pagination
+      const { data: logsData, count, error: logsError } = await supabase
+        .from('activity_log')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(currentPage * logsPerPage, (currentPage + 1) * logsPerPage - 1)
+
+      if (logsError) throw logsError
+      
+      setTotalLogsCount(count || 0)
+
+      // Fetch users
+      const { data: usersData, error: usersError } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (usersError) throw usersError
+
+      // Fetch stats
+      const { count: totalLeads } = await supabase
+        .from('leads')
+        .select('id', { count: 'exact', head: true })
+
+      const { count: totalResponses } = await supabase
+        .from('lead_responses')
+        .select('id', { count: 'exact', head: true })
+
+      // Get distinct count of active users in last 24 hours (limited to recent 10000 logs for performance)
+      const { data: activeUsersData } = await supabase
+        .from('activity_log')
+        .select('user_id')
+        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+        .limit(10000)
+
+      const activeUsersSet = new Set((activeUsersData || []).map((log: any) => log.user_id))
+      const activeUsersCount = activeUsersSet.size
+
+      // Fetch enrichment data with JOINs instead of per-log queries
+      const { data: enrichedUsersData } = await supabase
+        .from('users')
+        .select('id, name')
+        .in('id', Array.from(new Set((logsData || []).map((l: any) => l.user_id))))
+
+      const { data: enrichedLeadsData } = await supabase
+        .from('leads')
+        .select('id, data')
+        .in('id', Array.from(new Set((logsData || []).map((l: any) => l.lead_id).filter(Boolean))))
+
+      // Create lookup maps
+      const userMap = new Map((enrichedUsersData || []).map((u: any) => [u.id, u.name]))
+      const leadMap = new Map((enrichedLeadsData || []).map((l: any) => [l.id, l.data?.name]))
+
+      // Enrich logs using maps (no additional queries)
+      const enrichedLogs = (logsData || []).map((log: any) => ({
+        ...log,
+        user_name: userMap.get(log.user_id) || 'Unknown User',
+        lead_name: leadMap.get(log.lead_id) || 'Unknown Lead',
+        scheduled_for: null,
+      }))
+
+      setActivities(enrichedLogs)
+      setUsers(usersData || [])
+      setStats({
+        total_leads: totalLeads || 0,
+        total_responses: totalResponses || 0,
+        active_users: activeUsersCount,
+      })
+    } catch (error) {
+      console.error('[v0] Error fetching admin data:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // Check admin authentication on mount
   useEffect(() => {
-    const validateAdminSession = async () => {
-      try {
-        // Token is in HttpOnly cookie, automatically sent with request
-        const response = await fetch('/api/sessions/validate')
-
-        if (!response.ok) {
-          localStorage.removeItem('admin_role')
-          router.push('/')
-          return
-        }
-
-        setIsAuthenticated(true)
-      } catch (error) {
-        console.error('Session validation error:', error)
-        router.push('/')
-      }
+    if (!sessionLoading && !session) {
+      router.push('/')
+      return
+    }
+    if (sessionLoading) return
+    
+    // Check if user role is admin
+    if (session && session.user_role !== 'admin') {
+      router.push('/')
+      return
     }
 
-    validateAdminSession()
-  }, [router])
+    if (session?.user_role === 'admin') {
+      fetchData()
+    }
+  }, [session, sessionLoading, router])
 
+  // Fetch data when page changes (pagination only - no real-time subscriptions)
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Fetch activity logs with pagination
-        const { data: logsData, count, error: logsError } = await supabase
-          .from('activity_log')
-          .select('*', { count: 'exact' })
-          .order('created_at', { ascending: false })
-          .range(currentPage * logsPerPage, (currentPage + 1) * logsPerPage - 1)
-
-        if (logsError) throw logsError
-        
-        setTotalLogsCount(count || 0)
-
-        // Fetch users
-        const { data: usersData, error: usersError } = await supabase
-          .from('users')
-          .select('*')
-          .order('created_at', { ascending: false })
-
-        if (usersError) throw usersError
-
-        // Fetch stats
-        const { count: totalLeads } = await supabase
-          .from('leads')
-          .select('id', { count: 'exact', head: true })
-
-        const { count: totalResponses } = await supabase
-          .from('lead_responses')
-          .select('id', { count: 'exact', head: true })
-
-        // Get distinct count of active users in last 24 hours
-        const { data: activeUsersData } = await supabase
-          .from('activity_log')
-          .select('user_id')
-          .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-
-        const activeUsersSet = new Set((activeUsersData || []).map((log: any) => log.user_id))
-        const activeUsersCount = activeUsersSet.size
-
-        // Enrich activity logs with user and lead names
-        const enrichedLogs = await Promise.all(
-          (logsData || []).map(async (log: any) => {
-            const [userResult, leadResult, responseResult] = await Promise.all([
-              supabase.from('users').select('name').eq('id', log.user_id).single(),
-              supabase.from('leads').select('data').eq('id', log.lead_id).single(),
-              supabase
-                .from('lead_responses')
-                .select('scheduled_for')
-                .eq('lead_id', log.lead_id)
-                .eq('employee_id', log.user_id)
-                .eq('action', log.action_type)
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .single(),
-            ])
-
-            return {
-              ...log,
-              user_name: userResult.data?.name || 'Unknown User',
-              lead_name: leadResult.data?.data?.name || 'Unknown Lead',
-              scheduled_for: responseResult.data?.scheduled_for || null,
-            }
-          })
-        )
-
-        setActivities(enrichedLogs)
-        setUsers(usersData || [])
-        setStats({
-          total_leads: totalLeads || 0,
-          total_responses: totalResponses || 0,
-          active_users: activeUsersCount,
-        })
-      } catch (error) {
-        console.error('[v0] Error fetching admin data:', error)
-      } finally {
-        setLoading(false)
-      }
+    if (session?.user_role === 'admin') {
+      fetchData()
     }
-
-    fetchData()
-
-    // Set up real-time subscription
-    const subscription = supabase
-      .channel('admin-updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'activity_log' }, () => {
-        fetchData()
-      })
-      .subscribe()
-
-    return () => {
-      subscription.unsubscribe()
-    }
-  }, [supabase, currentPage])
+  }, [currentPage, session?.user_role])
 
   const getActionColor = (action: string) => {
     const colors: Record<string, string> = {
@@ -174,21 +161,31 @@ export default function AdminDashboard() {
   const handleLogout = async () => {
     try {
       // Token is in HttpOnly cookie, automatically sent with request
-      await fetch('/api/sessions/validate', {
+      await fetch('/api/sessions', {
         method: 'DELETE',
+        credentials: 'include',
       })
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
-      localStorage.removeItem('admin_role')
       router.push('/')
     }
   }
 
-  if (!isAuthenticated) {
+  if (sessionLoading || !session) {
     return (
       <main className="min-h-screen bg-background p-8 flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </main>
+    )
+  }
+
+  if (session.user_role !== 'admin') {
+    return (
+      <main className="min-h-screen bg-background p-8 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-destructive">Unauthorized access</p>
+        </div>
       </main>
     )
   }

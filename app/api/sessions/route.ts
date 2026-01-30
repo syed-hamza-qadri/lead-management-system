@@ -4,11 +4,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 
 export async function POST(request: NextRequest) {
-  const { userId, role } = await request.json()
+  const { userId, role, userName } = await request.json()
 
-  if (!userId || !role) {
+  if (!userId || !role || !userName) {
     return NextResponse.json(
-      { error: 'User ID and role are required' },
+      { error: 'User ID, role, and name are required' },
       { status: 400 }
     )
   }
@@ -42,13 +42,14 @@ export async function POST(request: NextRequest) {
     // Session expires in 30 days
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
 
-    // Create session
+    // Create session with minimal required data
     const { data, error } = await supabase
       .from('sessions')
       .insert({
         user_id: userId,
         token,
         role,
+        user_name: userName,
         expires_at: expiresAt,
       })
       .select()
@@ -60,7 +61,7 @@ export async function POST(request: NextRequest) {
       session: data[0],
     })
   } catch (error) {
-    console.error('[v0] Error creating session:', error)
+    console.error('[Session] Error creating session:', error)
     return NextResponse.json(
       { error: 'Failed to create session' },
       { status: 500 }
