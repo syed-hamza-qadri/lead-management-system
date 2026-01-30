@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
+import { useSession } from '@/lib/session'
 import { getCallerLeads, getCallerNiches, getCallerCities } from '@/lib/auth'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -39,9 +40,9 @@ export default function CallerPortal() {
   const router = useRouter()
   const { toast } = useToast()
   const supabase = getSupabaseClient()
+  const { session, loading: sessionLoading } = useSession()
 
   const [loading, setLoading] = useState(true)
-  const [userName, setUserName] = useState<string>('')
   const [leads, setLeads] = useState<Lead[]>([])
   const [niches, setNiches] = useState<NicheData[]>([])
   const [cities, setCities] = useState<CityData[]>([])
@@ -61,8 +62,14 @@ export default function CallerPortal() {
   const [searchTerm, setSearchTerm] = useState('')
 
   useEffect(() => {
-    fetchData()
-  }, [])
+    if (!sessionLoading && !session) {
+      router.push('/portal')
+      return
+    }
+    if (session) {
+      fetchData()
+    }
+  }, [session, sessionLoading, router])
 
   useEffect(() => {
     if (selectedNiche) {
@@ -75,20 +82,16 @@ export default function CallerPortal() {
   const fetchData = async () => {
     try {
       setLoading(true)
-      const userId = localStorage.getItem('userId')
-      const userName = localStorage.getItem('userName')
-      if (!userId) {
+      if (!session?.user_id) {
         router.push('/portal')
         return
       }
 
-      setUserName(userName || 'User')
-
       // Fetch caller's assigned niches, cities, and leads
       const [nichesData, citiesData, leadsData] = await Promise.all([
-        getCallerNiches(userId),
-        getCallerCities(userId),
-        getCallerLeads(userId),
+        getCallerNiches(session.user_id),
+        getCallerCities(session.user_id),
+        getCallerLeads(session.user_id),
       ])
 
       const typedNiches: NicheData[] = (nichesData as any[]).map(n => ({
@@ -130,7 +133,10 @@ export default function CallerPortal() {
 
     setSubmittingAction(true)
     try {
-      const userId = localStorage.getItem('userId')!
+      if (!session?.user_id) {
+        throw new Error('Session not found')
+      }
+      const userId = session.user_id
       
       // Create lead response
       const { error: responseError } = await supabase
@@ -223,7 +229,7 @@ export default function CallerPortal() {
         <div className="flex items-center gap-4 mb-8">
           <div className="flex-1">
             <h1 className="text-3xl font-bold text-foreground">Your Leads</h1>
-            <p className="text-muted-foreground mt-2">Welcome, {userName}. Select a niche to view available leads</p>
+            <p className="text-muted-foreground mt-2">Welcome, {session?.user_name}. Select a niche to view available leads</p>
           </div>
           <Button variant="outline" onClick={handleLogout} className="flex items-center gap-2">
             <LogOut className="w-4 h-4" />

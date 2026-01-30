@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
+import { useSession } from '@/lib/session'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,7 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Plus, Trash2, ArrowLeft, Edit2, LogOut } from 'lucide-react'
+import { Loader2, Plus, Trash2, Edit2, LogOut } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
 interface Lead {
@@ -38,6 +39,7 @@ export default function LeadGenerator() {
   const router = useRouter()
   const { toast } = useToast()
   const supabase = getSupabaseClient()
+  const { session, loading: sessionLoading } = useSession()
 
   const [loading, setLoading] = useState(true)
   const [leads, setLeads] = useState<Lead[]>([])
@@ -56,8 +58,14 @@ export default function LeadGenerator() {
   const [leadDetails, setLeadDetails] = useState('')
 
   useEffect(() => {
-    fetchData()
-  }, [])
+    if (!sessionLoading && !session) {
+      router.push('/portal')
+      return
+    }
+    if (session) {
+      fetchData()
+    }
+  }, [session, sessionLoading, router])
 
   useEffect(() => {
     if (selectedNiche) {
@@ -70,7 +78,11 @@ export default function LeadGenerator() {
   const fetchData = async () => {
     try {
       setLoading(true)
-      const userId = localStorage.getItem('userId')
+      if (!session?.user_id) {
+        router.push('/portal')
+        return
+      }
+      const userId = session.user_id
 
       const { data: nichesData } = await supabase
         .from('niches')
@@ -144,7 +156,10 @@ export default function LeadGenerator() {
         setEditingId(null)
       } else {
         // Create new lead
-        const userId = localStorage.getItem('userId')
+        if (!session?.user_id) {
+          throw new Error('Session not found')
+        }
+        const userId = session.user_id
         const { error } = await supabase
           .from('leads')
           .insert({
@@ -268,14 +283,6 @@ export default function LeadGenerator() {
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => router.push('/portal')}
-            className="h-10 w-10 p-0"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </Button>
           <div className="flex-1">
             <h1 className="text-3xl font-bold text-foreground">Lead Generator</h1>
             <p className="text-muted-foreground mt-2">Create and manage leads across niches and cities</p>
