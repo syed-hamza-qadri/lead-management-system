@@ -66,6 +66,15 @@ interface CallerPerformance {
   pending: number
 }
 
+interface LeadGeneratorPerformance {
+  added: number
+  approved: number
+  declined: number
+  scheduled: number
+  pending: number
+  conversionRate: number
+}
+
 export default function ManagerPortal() {
   const router = useRouter()
   const { toast } = useToast()
@@ -81,6 +90,7 @@ export default function ManagerPortal() {
   const [callerNiches, setCallerNiches] = useState<{ [key: string]: Niche[] }>({})
   const [callerCities, setCallerCities] = useState<{ [key: string]: City[] }>({})
   const [callerPerformance, setCallerPerformance] = useState<{ [key: string]: CallerPerformance }>({})
+  const [leadGeneratorPerformance, setLeadGeneratorPerformance] = useState<{ [key: string]: LeadGeneratorPerformance }>({})
   const [cityAssignmentsData, setCityAssignmentsData] = useState<any[]>([])
   const [leadResponses, setLeadResponses] = useState<{ [leadId: string]: any }>({})
   
@@ -190,13 +200,36 @@ export default function ManagerPortal() {
         email: m.email,
         assignmentId: ''
       }))
+
+      // Fetch ALL users for lead generator lookups
+      const { data: allUsersData } = await supabase
+        .from('users')
+        .select('id, name, email')
+        .order('name') as any
+
+      const allUsersForLookup = [
+        ...callersToDisplay,
+        ...managersToDisplay,
+        ...((allUsersData || []) as any[]).map((u: any) => ({
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          assignmentId: ''
+        }))
+      ]
       
-      // Combine callers and managers for lookups only
-      const allUsersForLookup = [...callersToDisplay, ...managersToDisplay]
+      // Remove duplicates by id
+      const uniqueUsersMap = new Map()
+      allUsersForLookup.forEach(u => {
+        if (!uniqueUsersMap.has(u.id)) {
+          uniqueUsersMap.set(u.id, u)
+        }
+      })
+      const uniqueUsers = Array.from(uniqueUsersMap.values())
       
       // Keep original callers for dashboard and keep managers separate for lookups
       setCallers(callersToDisplay)
-      setAllUsers(allUsersForLookup)
+      setAllUsers(uniqueUsers)
 
       // Fetch all niches and cities
       const { data: nichesData } = await supabase.from('niches').select('*').order('name') as any
@@ -310,6 +343,52 @@ export default function ManagerPortal() {
 
       // Batch set performance data
       setCallerPerformance(Object.fromEntries(performanceData))
+
+      // Calculate lead generator performance
+      const generatorPerformanceData = new Map<string, LeadGeneratorPerformance>()
+      const allGenerators = new Set<string>()
+      
+      ;(leadsData || []).forEach((lead: any) => {
+        if (lead.created_by) {
+          allGenerators.add(lead.created_by)
+        }
+      })
+
+      allGenerators.forEach((generatorId: string) => {
+        const generatorLeads = (leadsData || []).filter((l: any) => l.created_by === generatorId)
+        let approved = 0, declined = 0, scheduled = 0
+        
+        generatorLeads.forEach((lead: any) => {
+          const leadResponses = responseMapByLeadAndCaller.get(lead.id)
+          if (leadResponses) {
+            // For each lead, check if ANY response has approve, decline, or later
+            let hasApprove = false, hasDecline = false, hasLater = false
+            leadResponses.forEach((responses: any) => {
+              if (responses.includes('approve')) hasApprove = true
+              if (responses.includes('decline')) hasDecline = true
+              if (responses.includes('later')) hasLater = true
+            })
+            if (hasApprove) approved++
+            if (hasDecline) declined++
+            if (hasLater) scheduled++
+          }
+        })
+
+        const pending = generatorLeads.length - (approved + declined + scheduled)
+        const total = approved + declined + scheduled
+        const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
+
+        generatorPerformanceData.set(generatorId, {
+          added: generatorLeads.length,
+          approved,
+          declined,
+          scheduled,
+          pending,
+          conversionRate
+        })
+      })
+
+      setLeadGeneratorPerformance(Object.fromEntries(generatorPerformanceData))
     } catch (error) {
       console.error('Error fetching data:', error)
       toast({
@@ -498,6 +577,79 @@ export default function ManagerPortal() {
             pending
           }
         }))
+      }
+
+      // Also refresh lead generator performance on dashboard refresh
+      try {
+        const { data: freshLeads } = await supabase
+          .from('leads')
+          .select('id, created_by')
+          .order('created_at', { ascending: false }) as any
+
+        const { data: freshResponses } = await supabase
+          .from('lead_responses')
+          .select('lead_id, action, employee_id')
+          .order('created_at', { ascending: false })
+          .limit(1000) as any
+
+        // Create response map for lead generators
+        const responseMapByLeadAndCallerId = new Map<string, Map<string, string[]>>()
+        ;(freshResponses || []).forEach((response: any) => {
+          if (!responseMapByLeadAndCallerId.has(response.lead_id)) {
+            responseMapByLeadAndCallerId.set(response.lead_id, new Map())
+          }
+          if (!responseMapByLeadAndCallerId.get(response.lead_id)!.has(response.employee_id)) {
+            responseMapByLeadAndCallerId.get(response.lead_id)!.set(response.employee_id, [])
+          }
+          responseMapByLeadAndCallerId.get(response.lead_id)!.get(response.employee_id)!.push(response.action)
+        })
+
+        // Calculate lead generator performance
+        const generatorPerformanceMap = new Map<string, LeadGeneratorPerformance>()
+        const allGeneratorsSet = new Set<string>()
+        
+        ;(freshLeads || []).forEach((lead: any) => {
+          if (lead.created_by) {
+            allGeneratorsSet.add(lead.created_by)
+          }
+        })
+
+        allGeneratorsSet.forEach((generatorId: string) => {
+          const generatorLeads = (freshLeads || []).filter((l: any) => l.created_by === generatorId)
+          let approved = 0, declined = 0, scheduled = 0
+          
+          generatorLeads.forEach((lead: any) => {
+            const leadResponses = responseMapByLeadAndCallerId.get(lead.id)
+            if (leadResponses) {
+              let hasApprove = false, hasDecline = false, hasLater = false
+              leadResponses.forEach((responses: any) => {
+                if (responses.includes('approve')) hasApprove = true
+                if (responses.includes('decline')) hasDecline = true
+                if (responses.includes('later')) hasLater = true
+              })
+              if (hasApprove) approved++
+              if (hasDecline) declined++
+              if (hasLater) scheduled++
+            }
+          })
+
+          const pending = generatorLeads.length - (approved + declined + scheduled)
+          const total = approved + declined + scheduled
+          const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
+
+          generatorPerformanceMap.set(generatorId, {
+            added: generatorLeads.length,
+            approved,
+            declined,
+            scheduled,
+            pending,
+            conversionRate
+          })
+        })
+
+        setLeadGeneratorPerformance(Object.fromEntries(generatorPerformanceMap))
+      } catch (error) {
+        console.error('Error calculating lead generator performance:', error)
       }
     } catch (error) {
       console.error('Error refreshing dashboard:', error)
@@ -842,6 +994,58 @@ export default function ManagerPortal() {
                             <div className="flex justify-between items-center pt-2 border-t border-border">
                               <span className="font-semibold">Conversion Rate:</span>
                               <Badge className="bg-gray-100 text-gray-900">{conversionRate}%</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Current Niche & City Assignments */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Lead Generator Performance Metrics</CardTitle>
+                <CardDescription>Overview of leads created and their performance</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {Object.keys(leadGeneratorPerformance).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No lead generators yet</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {Object.entries(leadGeneratorPerformance).map(([generatorId, performance]) => {
+                      const generator = allUsers.find(u => u.id === generatorId)
+                      return (
+                        <Card key={generatorId} className="bg-gradient-to-br from-card to-muted/20">
+                          <CardHeader className="pb-1">
+                            <CardTitle className="text-base">{generator?.name || 'Unknown'}</CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-2 text-sm pt-0">
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Leads Added:</span>
+                              <Badge variant="outline">{performance.added || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Approved:</span>
+                              <Badge className="bg-green-100 text-green-700">{performance.approved || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Declined:</span>
+                              <Badge className="bg-red-100 text-red-700">{performance.declined || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Scheduled:</span>
+                              <Badge variant="outline">{performance.scheduled || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Pending:</span>
+                              <Badge className="bg-yellow-100 text-yellow-700">{performance.pending || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center pt-2 border-t border-border">
+                              <span className="font-semibold">Conversion Rate:</span>
+                              <Badge className="bg-gray-100 text-gray-900">{performance.conversionRate}%</Badge>
                             </div>
                           </CardContent>
                         </Card>

@@ -282,7 +282,7 @@ export default function CallerPortal() {
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setPerformanceOpen(true)} className="flex items-center gap-2">
               <BarChart3 className="w-4 h-4" />
-              STATUS
+              Status
             </Button>
             <Button variant="outline" onClick={handleLogout} className="flex items-center gap-2">
               <LogOut className="w-4 h-4" />

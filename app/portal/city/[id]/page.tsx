@@ -8,7 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Loader2, ArrowLeft, ChevronRight, Calendar } from 'lucide-react'
+import { Loader2, ArrowLeft, ChevronRight, Calendar, BarChart3 } from 'lucide-react'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 interface Lead {
   id: string
@@ -34,6 +35,8 @@ export default function LeadList() {
   const [nicheName, setNicheName] = useState('')
   const [loading, setLoading] = useState(true)
   const [defaultTab, setDefaultTab] = useState('unassigned')
+  const [performanceOpen, setPerformanceOpen] = useState(false)
+  const [performance, setPerformance] = useState({ approved: 0, declined: 0, scheduled: 0, pending: 0 })
   const supabase = getSupabaseClient()
 
   // Check for tab query parameter
@@ -74,7 +77,6 @@ export default function LeadList() {
         .from('lead_responses')
         .select('lead_id, scheduled_for, action')
         .in('lead_id', leadIds.length > 0 ? leadIds : [''])
-        .eq('action', 'later')
         .order('created_at', { ascending: false })
 
       // Create lookup map for quick access
@@ -84,6 +86,19 @@ export default function LeadList() {
           scheduledMap.set(response.lead_id, response.scheduled_for)
         }
       })
+
+      // Calculate performance metrics from responses
+      let approved = 0, declined = 0, scheduled = 0
+      const leadsWithAction = new Set<string>()
+      ;(responseData || []).forEach((response: any) => {
+        leadsWithAction.add(response.lead_id)
+        if (response.action === 'approve') approved++
+        else if (response.action === 'decline') declined++
+        else if (response.action === 'later') scheduled++
+      })
+      
+      const pending = (data || []).length - leadsWithAction.size
+      setPerformance({ approved, declined, scheduled, pending })
 
       // Enrich leads using map (no additional queries)
       const enrichedLeads = (data || []).map((lead: any) => {
@@ -262,22 +277,68 @@ export default function LeadList() {
   return (
     <main className="min-h-screen bg-background p-8">
       <div className="max-w-4xl mx-auto">
-        <div className="flex items-center gap-4 mb-8">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => router.push('/portal/caller')}
-            className="h-10 w-10 p-0"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </Button>
-          <div>
-            <h1 className="text-3xl font-bold text-foreground">
-              {nicheName} in {cityName}
-            </h1>
-            <p className="text-muted-foreground mt-2">Manage your leads</p>
+        <div className="flex items-center justify-between gap-4 mb-8">
+          <div className="flex items-center gap-4">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push('/portal/caller')}
+              className="h-10 w-10 p-0"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </Button>
+            <div>
+              <h1 className="text-3xl font-bold text-foreground">
+                {nicheName} in {cityName}
+              </h1>
+              <p className="text-muted-foreground mt-2">Manage your leads</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setPerformanceOpen(true)} className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4" />
+              Status
+            </Button>
           </div>
         </div>
+
+        {/* Performance Dialog */}
+        <Dialog open={performanceOpen} onOpenChange={setPerformanceOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>City Performance</DialogTitle>
+              <DialogDescription>Your performance in this city</DialogDescription>
+            </DialogHeader>
+            
+            <Card className="bg-gradient-to-br from-card to-muted/20">
+              <CardHeader className="pb-1">
+                <CardTitle className="text-base">{cityName}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm pt-0">
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Total Leads:</span>
+                  <Badge variant="outline">{leads.length}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Approved:</span>
+                  <Badge className="bg-green-100 text-green-700">{performance.approved || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Declined:</span>
+                  <Badge className="bg-red-100 text-red-700">{performance.declined || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Scheduled:</span>
+                  <Badge variant="outline">{performance.scheduled || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Pending:</span>
+                  <Badge className="bg-yellow-100 text-yellow-700">{performance.pending || 0}</Badge>
+                </div>
+              </CardContent>
+            </Card>
+          </DialogContent>
+        </Dialog>
 
         <Tabs defaultValue={defaultTab} className="w-full">
           <TabsList className="grid w-full grid-cols-2">

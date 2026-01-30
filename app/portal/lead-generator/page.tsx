@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Plus, Trash2, Edit2, LogOut } from 'lucide-react'
+import { Loader2, Plus, Trash2, Edit2, LogOut, BarChart3 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
 interface Lead {
@@ -56,6 +56,21 @@ export default function LeadGenerator() {
   const [selectedCity, setSelectedCity] = useState('')
   const [leadName, setLeadName] = useState('')
   const [leadDetails, setLeadDetails] = useState('')
+  
+  // Performance metrics
+  const [performanceOpen, setPerformanceOpen] = useState(false)
+  const [performance, setPerformance] = useState({ 
+    added: 0, 
+    approved: 0, 
+    declined: 0, 
+    scheduled: 0, 
+    pending: 0,
+    conversionRate: 0
+  })
+  
+  // Lead details dialog
+  const [selectedLeadForDetails, setSelectedLeadForDetails] = useState<any>(null)
+  const [leadDetailsDialogOpen, setLeadDetailsDialogOpen] = useState(false)
 
   useEffect(() => {
     if (!sessionLoading && !session) {
@@ -105,6 +120,39 @@ export default function LeadGenerator() {
       setCities(citiesData || [])
       // Limit leads to first 100 for initial load (pagination)
       setLeads((leadsData || []).slice(0, 100))
+
+      // Calculate performance metrics for this lead generator
+      let approved = 0, declined = 0, scheduled = 0
+      const leadsWithAction = new Set<string>()
+      
+      // Get all responses for this generator's leads
+      const leadIds = (leadsData || []).map((l: any) => l.id)
+      if (leadIds.length > 0) {
+        const { data: responses } = await supabase
+          .from('lead_responses')
+          .select('lead_id, action')
+          .in('lead_id', leadIds)
+        
+        ;(responses || []).forEach((r: any) => {
+          leadsWithAction.add(r.lead_id)
+          if (r.action === 'approve') approved++
+          else if (r.action === 'decline') declined++
+          else if (r.action === 'later') scheduled++
+        })
+      }
+      
+      const pending = (leadsData || []).length - leadsWithAction.size
+      const total = approved + declined + scheduled
+      const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
+      
+      setPerformance({
+        added: (leadsData || []).length,
+        approved,
+        declined,
+        scheduled,
+        pending,
+        conversionRate
+      })
     } catch (error) {
       console.error('Error fetching data:', error)
       toast({
@@ -207,6 +255,14 @@ export default function LeadGenerator() {
     }
   }
 
+  const truncateDetails = (text: string, lines: number = 2) => {
+    const lineArray = text.split('\n')
+    if (lineArray.length > lines) {
+      return lineArray.slice(0, lines).join('\n') + '...'
+    }
+    return text.length > 50 ? text.substring(0, 50) + '...' : text
+  }
+
   const handleEditLead = (lead: Lead) => {
     setEditingId(lead.id)
     setIsEditing(true)
@@ -283,12 +339,16 @@ export default function LeadGenerator() {
     <main className="min-h-screen bg-background p-8">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
-        <div className="flex items-center gap-4 mb-8">
+        <div className="flex items-center justify-between gap-4 mb-8">
           <div className="flex-1">
             <h1 className="text-3xl font-bold text-foreground">Lead Generator</h1>
             <p className="text-muted-foreground mt-2">Create and manage leads across niches and cities</p>
           </div>
           <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setPerformanceOpen(true)} className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4" />
+              Status
+            </Button>
             <Dialog open={openDialog} onOpenChange={(open) => {
               setOpenDialog(open)
               if (!open) resetForm()
@@ -379,6 +439,48 @@ export default function LeadGenerator() {
           </div>
         </div>
 
+        {/* Performance Dialog */}
+        <Dialog open={performanceOpen} onOpenChange={setPerformanceOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Your Performance Metrics</DialogTitle>
+              <DialogDescription>Overview of your performance and capacity</DialogDescription>
+            </DialogHeader>
+            
+            <Card className="bg-gradient-to-br from-card to-muted/20">
+              <CardHeader className="pb-1">
+                <CardTitle className="text-base">{session?.user_name}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm pt-0">
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Leads Added:</span>
+                  <Badge variant="outline">{performance.added}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Approved:</span>
+                  <Badge className="bg-green-100 text-green-700">{performance.approved || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Declined:</span>
+                  <Badge className="bg-red-100 text-red-700">{performance.declined || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Scheduled:</span>
+                  <Badge variant="outline">{performance.scheduled || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Pending:</span>
+                  <Badge className="bg-yellow-100 text-yellow-700">{performance.pending || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t border-border">
+                  <span className="font-semibold">Conversion Rate:</span>
+                  <Badge className="bg-gray-100 text-gray-900">{performance.conversionRate}%</Badge>
+                </div>
+              </CardContent>
+            </Card>
+          </DialogContent>
+        </Dialog>
+
         {/* Leads List */}
         <Card>
           <CardContent className="p-0">
@@ -395,6 +497,7 @@ export default function LeadGenerator() {
                       <th className="text-left px-6 py-3 font-semibold">Niche</th>
                       <th className="text-left px-6 py-3 font-semibold">City</th>
                       <th className="text-left px-6 py-3 font-semibold">Details</th>
+                      <th className="text-left px-6 py-3 font-semibold">Created At</th>
                       <th className="text-left px-6 py-3 font-semibold">Actions</th>
                     </tr>
                   </thead>
@@ -402,12 +505,17 @@ export default function LeadGenerator() {
                     {leads.map(lead => {
                       const niche = niches.find(n => n.id === lead.niche_id)
                       const city = cities.find(c => c.id === lead.city_id)
+                      const createdDate = new Date(lead.created_at).toLocaleDateString()
                       return (
                         <tr key={lead.id} className="border-b border-border hover:bg-muted/50 transition-colors">
-                          <td className="px-6 py-4 font-medium">{lead.data.name}</td>
+                          <td className="px-6 py-4 font-medium cursor-pointer text-primary hover:underline" onClick={() => {
+                            setSelectedLeadForDetails(lead)
+                            setLeadDetailsDialogOpen(true)
+                          }}>{lead.data.name}</td>
                           <td className="px-6 py-4 text-sm">{niche?.name}</td>
                           <td className="px-6 py-4 text-sm">{city?.name}</td>
-                          <td className="px-6 py-4 text-sm text-muted-foreground whitespace-pre-wrap">{lead.data.details}</td>
+                          <td className="px-6 py-4 text-sm text-muted-foreground whitespace-pre-wrap max-w-xs">{truncateDetails(lead.data.details)}</td>
+                          <td className="px-6 py-4 text-sm">{createdDate}</td>
                           <td className="px-6 py-4">
                             <div className="flex gap-2">
                               <Button
@@ -439,6 +547,123 @@ export default function LeadGenerator() {
             )}
           </CardContent>
         </Card>
+
+        {/* Lead Details Dialog */}
+        <Dialog open={leadDetailsDialogOpen} onOpenChange={setLeadDetailsDialogOpen}>
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-xl font-semibold">{selectedLeadForDetails?.data.name}</DialogTitle>
+            </DialogHeader>
+            {selectedLeadForDetails && (() => {
+              const niche = niches.find(n => n.id === selectedLeadForDetails.niche_id)
+              const city = cities.find(c => c.id === selectedLeadForDetails.city_id)
+              const createdDate = new Date(selectedLeadForDetails.created_at).toLocaleDateString()
+              return (
+                <div className="space-y-6">
+                  {/* Metadata */}
+                  <div className="flex gap-6 flex-wrap pb-6 border-b">
+                    {niche && (
+                      <div>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Niche</p>
+                        <p className="text-base font-medium text-foreground">{niche.name}</p>
+                      </div>
+                    )}
+                    {city && (
+                      <div>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">City</p>
+                        <p className="text-base font-medium text-foreground">{city.name}</p>
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Created</p>
+                      <p className="text-base font-medium text-foreground">{createdDate}</p>
+                    </div>
+                    {selectedLeadForDetails.status && (
+                      <div>
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</p>
+                        <p className="text-base font-medium text-foreground capitalize">{selectedLeadForDetails.status}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Lead Details */}
+                  <div className="space-y-8">
+                    {selectedLeadForDetails.data && Object.keys(selectedLeadForDetails.data).length > 0 ? (
+                      Object.entries(selectedLeadForDetails.data)
+                        .filter(([key]) => key !== 'name')
+                        .map(([key, value]) => {
+                          const stringValue = String(value);
+                          let parsedEntries: Array<[string, string]> = [];
+                          
+                          if (stringValue.includes('=') && stringValue.includes(',')) {
+                            parsedEntries = stringValue.split(',').map(pair => {
+                              const [k, v] = pair.split('=').map(s => s.trim());
+                              return [k || '', v || ''] as [string, string];
+                            }).filter(([k]) => k);
+                          } else if (stringValue.includes('=') && !stringValue.includes(',')) {
+                            const [k, v] = stringValue.split('=').map(s => s.trim());
+                            if (k) {
+                              parsedEntries = [[k, v || '']];
+                            }
+                          }
+                          
+                          if (parsedEntries.length > 0) {
+                            return (
+                              <div key={key}>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                  {parsedEntries.map(([pKey, pValue]) => {
+                                    const valueLines = pValue.includes(';') 
+                                      ? pValue.split(';').map(v => v.trim()).filter(v => v)
+                                      : [pValue];
+                                    
+                                    return (
+                                      <div key={`${key}-${pKey}`} className="pb-4 border-b border-border last:border-b-0">
+                                        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">
+                                          {pKey.replace(/_/g, ' ')}
+                                        </label>
+                                        <div className="space-y-1">
+                                          {valueLines.map((line, idx) => (
+                                            <p key={idx} className="text-sm text-foreground leading-relaxed">
+                                              {line}
+                                            </p>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          }
+                          
+                          return (
+                            <div key={key} className="pb-4 border-b border-border last:border-b-0">
+                              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">
+                                {key.replace(/_/g, ' ')}
+                              </label>
+                              {stringValue.includes(';') ? (
+                                <div className="space-y-1">
+                                  {stringValue.split(';').map((line, idx) => (
+                                    <p key={idx} className="text-sm text-foreground leading-relaxed">
+                                      {line.trim()}
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-sm text-foreground leading-relaxed">{stringValue}</p>
+                              )}
+                            </div>
+                          );
+                        })
+                    ) : (
+                      <p className="text-muted-foreground text-center py-8">No lead details available</p>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
+          </DialogContent>
+        </Dialog>
       </div>
     </main>
   )
