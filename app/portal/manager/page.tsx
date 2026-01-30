@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
+import { useSession } from '@/lib/session'
 import {
   getManagerCallers,
   assignNicheToCaller,
@@ -69,6 +70,7 @@ export default function ManagerPortal() {
   const router = useRouter()
   const { toast } = useToast()
   const supabase = getSupabaseClient()
+  const { session, loading: sessionLoading } = useSession()
 
   const [loading, setLoading] = useState<boolean>(true)
   const [callers, setCallers] = useState<Caller[]>([])
@@ -130,17 +132,23 @@ export default function ManagerPortal() {
   const [editingCity, setEditingCity] = useState<{id: string, name: string, niche_id: string} | null>(null)
 
   useEffect(() => {
-    fetchData()
-  }, [])
+    if (!sessionLoading && !session) {
+      router.push('/portal')
+      return
+    }
+    if (session) {
+      fetchData()
+    }
+  }, [session, sessionLoading, router])
 
   const fetchData = async () => {
     try {
       setLoading(true)
-      const userId = localStorage.getItem('userId')
-      if (!userId) {
+      if (!session?.user_id) {
         router.push('/portal')
         return
       }
+      const userId = session.user_id
 
       // Fetch callers assigned to this manager
       const callersData = await getManagerCallers(userId)
