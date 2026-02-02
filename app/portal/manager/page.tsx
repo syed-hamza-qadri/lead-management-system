@@ -27,6 +27,7 @@ interface Caller {
   name: string
   email: string
   assignmentId: string
+  role?: string
 }
 
 interface Niche {
@@ -50,7 +51,9 @@ interface Lead {
   assigned_to?: string
   assigned_by_id?: string
   created_at: string
+  actioned_at?: string | null
   status?: string
+  follow_up_date?: string | null
   creator?: { id: string; name: string }
 }
 
@@ -121,6 +124,7 @@ export default function ManagerPortal() {
   const [leadCityFilter, setLeadCityFilter] = useState<string>('')
   const [leadCreatedByFilter, setLeadCreatedByFilter] = useState<string>('')
   const [leadAssignedToFilter, setLeadAssignedToFilter] = useState<string>('')
+  const [leadStatusFilter, setLeadStatusFilter] = useState<string>('')
 
   // Setup tab states
   const [setupDialogs, setSetupDialogs] = useState<{
@@ -140,6 +144,14 @@ export default function ManagerPortal() {
   const [setupSaving, setSetupSaving] = useState(false)
   const [editingNiche, setEditingNiche] = useState<{id: string, name: string} | null>(null)
   const [editingCity, setEditingCity] = useState<{id: string, name: string, niche_id: string} | null>(null)
+  
+  // Status edit state
+  const [editingStatusLeadId, setEditingStatusLeadId] = useState<string | null>(null)
+  const [statusUpdate, setStatusUpdate] = useState<string>('')
+  const [updatingStatus, setUpdatingStatus] = useState(false)
+  const [statusDialogOpen, setStatusDialogOpen] = useState(false)
+  const [scheduleDays, setScheduleDays] = useState<string>('')
+  const [editingLeadDetails, setEditingLeadDetails] = useState<{ index: number; name: string; callerName: string } | null>(null)
 
   useEffect(() => {
     if (!sessionLoading && !session) {
@@ -160,22 +172,44 @@ export default function ManagerPortal() {
       }
       const userId = session.user_id
 
+      // Fetch ALL users with roles first
+      const { data: allUsersData } = await supabase
+        .from('users')
+        .select('id, name, email, role')
+        .order('name') as any
+
+      // Create a map of all users with role included
+      const usersByIdMap = new Map<string, any>()
+      ;(allUsersData || []).forEach((u: any) => {
+        usersByIdMap.set(u.id, {
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          assignmentId: ''
+        })
+      })
+
       // Fetch callers assigned to this manager
       const callersData = await getManagerCallers(userId)
       let callersToDisplay: Caller[] = (callersData as any[]).length > 0 
-        ? (callersData as any[]).map(c => ({
-            id: c.id || c.users?.id,
-            name: c.name || c.users?.name,
-            email: c.email || c.users?.email,
-            assignmentId: c.assignmentId || c.id
-          }))
+        ? (callersData as any[]).map(c => {
+            const id = c.id || c.users?.id
+            return {
+              id,
+              name: c.name || c.users?.name,
+              email: c.email || c.users?.email,
+              role: usersByIdMap.get(id)?.role || 'caller',
+              assignmentId: c.assignmentId || c.id
+            }
+          })
         : []
       
       // If no callers assigned yet, fetch all available callers
       if (callersToDisplay.length === 0) {
         const { data: allCallers } = await supabase
           .from('users')
-          .select('id, name, email')
+          .select('id, name, email, role')
           .eq('role', 'caller')
           .order('name') as any
         
@@ -183,51 +217,32 @@ export default function ManagerPortal() {
           id: c.id,
           name: c.name,
           email: c.email,
+          role: c.role,
           assignmentId: ''
         }))
       }
       
-      // Also fetch all managers for assignment lookups
-      const { data: allManagers } = await supabase
-        .from('users')
-        .select('id, name, email')
-        .eq('role', 'manager')
-        .order('name') as any
+      // Build unique users map
+      const uniqueUsersMap = new Map<string, any>()
+      callersToDisplay.forEach(c => {
+        uniqueUsersMap.set(c.id, c)
+      })
       
-      const managersToDisplay = ((allManagers || []) as any[]).map((m: any) => ({
-        id: m.id,
-        name: m.name,
-        email: m.email,
-        assignmentId: ''
-      }))
-
-      // Fetch ALL users for lead generator lookups
-      const { data: allUsersData } = await supabase
-        .from('users')
-        .select('id, name, email')
-        .order('name') as any
-
-      const allUsersForLookup = [
-        ...callersToDisplay,
-        ...managersToDisplay,
-        ...((allUsersData || []) as any[]).map((u: any) => ({
-          id: u.id,
-          name: u.name,
-          email: u.email,
-          assignmentId: ''
-        }))
-      ]
-      
-      // Remove duplicates by id
-      const uniqueUsersMap = new Map()
-      allUsersForLookup.forEach(u => {
+      ;(allUsersData || []).forEach((u: any) => {
         if (!uniqueUsersMap.has(u.id)) {
-          uniqueUsersMap.set(u.id, u)
+          uniqueUsersMap.set(u.id, {
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            role: u.role,
+            assignmentId: ''
+          })
         }
       })
+
       const uniqueUsers = Array.from(uniqueUsersMap.values())
       
-      // Keep original callers for dashboard and keep managers separate for lookups
+      // Keep original callers for dashboard
       setCallers(callersToDisplay)
       setAllUsers(uniqueUsers)
 
@@ -238,7 +253,7 @@ export default function ManagerPortal() {
       // Fetch limited leads for initial display (pagination)
       const { data: leadsData, error: leadsError } = await supabase
         .from('leads')
-        .select('*, creator:created_by(id, name)')
+        .select('*, creator:created_by(id, name), actioned_at')
         .order('created_at', { ascending: false })
         .limit(100) as any
 
@@ -406,7 +421,7 @@ export default function ManagerPortal() {
       // Fetch fresh leads data
       const { data: leadsData, error: leadsError } = await supabase
         .from('leads')
-        .select('*, creator:created_by(id, name)')
+        .select('*, creator:created_by(id, name), actioned_at')
         .order('created_at', { ascending: false }) as any
 
       if (leadsError) {
@@ -456,7 +471,7 @@ export default function ManagerPortal() {
       // Fetch fresh lead responses
       const { data: allLeadResponses } = await supabase
         .from('lead_responses')
-        .select('lead_id, action, scheduled_for, created_at, response_text')
+        .select('lead_id, action, scheduled_for, created_at, actioned_at, response_text')
         .order('created_at', { ascending: false }) as any
 
       // Create a map of lead_id to latest response
@@ -489,27 +504,185 @@ export default function ManagerPortal() {
     }
   }
 
+  // Handle status update for leads
+  const handleUpdateLeadStatus = async (leadId: string, newStatus: string) => {
+    setUpdatingStatus(true)
+    try {
+      // For schedule status, need days value
+      if (newStatus === 'schedule' && !scheduleDays) {
+        toast({
+          title: 'Error',
+          description: 'Please enter number of days for scheduled leads',
+          variant: 'destructive',
+        })
+        setUpdatingStatus(false)
+        return
+      }
+
+      if (!session?.user_id) {
+        throw new Error('Session not found')
+      }
+
+      // Map status values - normalize 'schedule' to 'scheduled'
+      const mappedStatus = newStatus === 'schedule' ? 'scheduled' : newStatus
+      const updateData: any = { status: mappedStatus }
+      let scheduledForDate = null
+      
+      // If scheduling, add the follow-up date
+      if ((newStatus === 'schedule' || newStatus === 'scheduled') && scheduleDays) {
+        const followUpDate = new Date()
+        followUpDate.setDate(followUpDate.getDate() + parseInt(scheduleDays))
+        updateData.follow_up_date = followUpDate.toISOString()
+        scheduledForDate = followUpDate.toISOString()
+      }
+
+      // Update lead in database (includes setting actioned_at via trigger)
+      const { error: leadError } = await supabase
+        .from('leads')
+        .update(updateData)
+        .eq('id', leadId)
+
+      if (leadError) throw leadError
+
+      // Check if lead_response already exists
+      const { data: existingResponse, error: fetchError } = await supabase
+        .from('lead_responses')
+        .select('id')
+        .eq('lead_id', leadId)
+        .eq('employee_id', session.user_id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      // Note: actioned_at is automatically set by database trigger
+      // Create response object with proper action value
+      const responseData = {
+        action: mappedStatus,
+        scheduled_for: scheduledForDate,
+        response_text: ''
+      }
+
+      // Update or insert lead_response
+      if (existingResponse && existingResponse.id) {
+        const { error: updateError } = await supabase
+          .from('lead_responses')
+          .update(responseData)
+          .eq('id', existingResponse.id)
+
+        if (updateError) throw updateError
+      } else {
+        const { error: insertError } = await supabase
+          .from('lead_responses')
+          .insert({
+            lead_id: leadId,
+            employee_id: session.user_id,
+            ...responseData
+          })
+
+        if (insertError) throw insertError
+      }
+
+      // Update local state with the new status
+      const updatedLeads = leads.map(l => 
+        l.id === leadId ? { 
+          ...l, 
+          status: mappedStatus,
+          follow_up_date: updateData.follow_up_date || l.follow_up_date || null
+        } : l
+      )
+      setLeads(updatedLeads)
+      
+      // Update leadResponses to reflect the new action timestamp
+      setLeadResponses(prev => ({
+        ...prev,
+        [leadId]: {
+          id: leadId,
+          action: mappedStatus,
+          response_text: '',
+          scheduled_for: scheduledForDate,
+          actioned_at: new Date().toISOString()
+        }
+      }))
+      
+      // Update selectedLeadForDetails if dialog is open
+      if (selectedLeadForDetails && selectedLeadForDetails.id === leadId) {
+        setSelectedLeadForDetails({
+          ...selectedLeadForDetails,
+          status: mappedStatus,
+          follow_up_date: updateData.follow_up_date || selectedLeadForDetails.follow_up_date || null
+        })
+      }
+      
+      // Clear editing state
+      setEditingStatusLeadId(null)
+      setStatusUpdate('')
+      setScheduleDays('')
+      setEditingLeadDetails(null)
+      
+      toast({
+        title: 'Success',
+        description: 'Lead status updated successfully',
+      })
+
+      return true
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : JSON.stringify(error)
+      console.error('Error updating lead status:', errorMessage)
+      console.error('Error details:', error)
+      toast({
+        title: 'Error',
+        description: errorMessage || 'Failed to update lead status',
+        variant: 'destructive',
+      })
+      return false
+    } finally {
+      setUpdatingStatus(false)
+    }
+  }
+
   // Lightweight refresh for dashboard - only fetch performance metrics
   const refreshDashboard = async () => {
     setTabLoadingStates(prev => ({ ...prev, dashboard: true }))
     try {
       const userId = localStorage.getItem('userId')
       
+      // Fetch ALL users with roles
+      const { data: allUsersData } = await supabase
+        .from('users')
+        .select('id, name, email, role')
+        .order('name') as any
+
+      // Create a map of all users with role included
+      const usersByIdMap = new Map<string, any>()
+      ;(allUsersData || []).forEach((u: any) => {
+        usersByIdMap.set(u.id, {
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          assignmentId: ''
+        })
+      })
+      
       // Refresh caller data to get updated names and info
       const callersData = await getManagerCallers(userId || '')
       let callersToDisplay: Caller[] = (callersData as any[]).length > 0 
-        ? (callersData as any[]).map(c => ({
-            id: c.id || c.users?.id,
-            name: c.name || c.users?.name,
-            email: c.email || c.users?.email,
-            assignmentId: c.assignmentId || c.id
-          }))
+        ? (callersData as any[]).map(c => {
+            const id = c.id || c.users?.id
+            return {
+              id,
+              name: c.name || c.users?.name,
+              email: c.email || c.users?.email,
+              role: usersByIdMap.get(id)?.role || 'caller',
+              assignmentId: c.assignmentId || c.id
+            }
+          })
         : []
       
       if (callersToDisplay.length === 0) {
         const { data: allCallers } = await supabase
           .from('users')
-          .select('id, name, email')
+          .select('id, name, email, role')
           .eq('role', 'caller')
           .order('name') as any
         
@@ -517,11 +690,33 @@ export default function ManagerPortal() {
           id: c.id,
           name: c.name,
           email: c.email,
+          role: c.role,
           assignmentId: ''
         }))
       }
+
+      // Build unique users map
+      const uniqueUsersMap = new Map<string, any>()
+      callersToDisplay.forEach(c => {
+        uniqueUsersMap.set(c.id, c)
+      })
+      
+      ;(allUsersData || []).forEach((u: any) => {
+        if (!uniqueUsersMap.has(u.id)) {
+          uniqueUsersMap.set(u.id, {
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            role: u.role,
+            assignmentId: ''
+          })
+        }
+      })
+
+      const uniqueUsers = Array.from(uniqueUsersMap.values())
       
       setCallers(callersToDisplay)
+      setAllUsers(uniqueUsers)
       
       // Refresh caller performance data
       for (const caller of callersToDisplay) {
@@ -669,6 +864,25 @@ export default function ManagerPortal() {
       setNiches((nichesData || []) as Niche[])
       setCities((citiesData || []) as City[])
 
+      // Also fetch users to maintain role information
+      const { data: allUsersData } = await supabase
+        .from('users')
+        .select('id, name, email, role')
+        .order('name') as any
+      
+      const uniqueUsersMap = new Map<string, any>()
+      ;(allUsersData || []).forEach((u: any) => {
+        uniqueUsersMap.set(u.id, {
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          assignmentId: ''
+        })
+      })
+      
+      setAllUsers(Array.from(uniqueUsersMap.values()))
+
       // Refresh assignments for each caller
       for (const caller of callers) {
         const { data: nicheAssignments } = await supabase
@@ -703,6 +917,25 @@ export default function ManagerPortal() {
     setTabLoadingStates(prev => ({ ...prev, leads: true }))
     try {
       await reloadLeadsOnly()
+      
+      // Also refresh users to maintain role information
+      const { data: allUsersData } = await supabase
+        .from('users')
+        .select('id, name, email, role')
+        .order('name') as any
+      
+      const uniqueUsersMap = new Map<string, any>()
+      ;(allUsersData || []).forEach((u: any) => {
+        uniqueUsersMap.set(u.id, {
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          assignmentId: ''
+        })
+      })
+      
+      setAllUsers(Array.from(uniqueUsersMap.values()))
     } finally {
       setTabLoadingStates(prev => ({ ...prev, leads: false }))
     }
@@ -711,10 +944,11 @@ export default function ManagerPortal() {
   const refreshSetupTab = async () => {
     setTabLoadingStates(prev => ({ ...prev, setup: true }))
     try {
-      const [nicheRes, cityRes, leadRes] = await Promise.all([
+      const [nicheRes, cityRes, leadRes, usersRes] = await Promise.all([
         supabase.from('niches').select('*').order('name'),
         supabase.from('cities').select('*').order('name'),
         supabase.from('leads').select('*').order('created_at', { ascending: false }),
+        supabase.from('users').select('id, name, email, role').order('name'),
       ])
 
       setNiches(nicheRes.data || [])
@@ -730,6 +964,19 @@ export default function ManagerPortal() {
         setCities(enrichedCities)
       }
 
+      // Update users with role information
+      const uniqueUsersMap = new Map<string, any>()
+      ;(usersRes.data || []).forEach((u: any) => {
+        uniqueUsersMap.set(u.id, {
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          assignmentId: ''
+        })
+      })
+      
+      setAllUsers(Array.from(uniqueUsersMap.values()))
       setLeads(leadRes.data || [])
     } catch (error) {
       console.error('Error refreshing setup tab:', error)
@@ -841,6 +1088,11 @@ export default function ManagerPortal() {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
+  const formatDateTime = (dateStr: string) => {
+    const date = new Date(dateStr)
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  }
+
   const getRemainingDays = (scheduledDate: string) => {
     const today = new Date()
     const scheduled = new Date(scheduledDate)
@@ -872,13 +1124,37 @@ export default function ManagerPortal() {
           </Button>
         </div>
 
-        {/* Summary Cards - Pending Cities and Total Leads */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
+        {/* Summary Cards - 5 Metrics in One Line */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
           <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
             <CardContent className="pt-3 pb-3 px-4 text-center">
               <p className="text-xs font-medium text-muted-foreground mb-1">Cities Pending</p>
               <p className="text-2xl font-bold text-primary">
                 {cities.filter(c => !cityAssignmentsData.some(ca => ca.city_id === c.id)).length}
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Total Niches</p>
+              <p className="text-2xl font-bold text-primary">
+                {niches.length}
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Total Callers</p>
+              <p className="text-2xl font-bold text-primary">
+                {allUsers.filter(u => u.role === 'caller').length}
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Total Generators</p>
+              <p className="text-2xl font-bold text-primary">
+                {allUsers.filter(u => u.role === 'lead_generator').length}
               </p>
             </CardContent>
           </Card>
@@ -1526,8 +1802,8 @@ export default function ManagerPortal() {
             ) : (
               <>
                 {/* Search and Filters */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <div className="flex-1 min-w-[250px]">
+                <div className="flex items-center gap-2 overflow-x-auto pb-2">
+                  <div className="flex-1 min-w-[200px]">
                     <Input
                       placeholder="Search by lead name..."
                       value={leadSearchFilter}
@@ -1535,13 +1811,13 @@ export default function ManagerPortal() {
                       className="w-full"
                     />
                   </div>
-                  <div className="w-[140px] shrink-0">
+                  <div className="w-[120px] shrink-0">
                     <Select value={leadNicheFilter} onValueChange={(v) => {
                       setLeadNicheFilter(v)
                       setLeadCityFilter('') // Reset city filter when niche changes
                     }}>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select niche..." />
+                        <SelectValue placeholder="Niche..." />
                       </SelectTrigger>
                       <SelectContent>
                         {niches.map(niche => (
@@ -1550,10 +1826,10 @@ export default function ManagerPortal() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="min-w-[140px] shrink-0">
+                  <div className="min-w-[120px] shrink-0">
                     <Select value={leadCityFilter} onValueChange={setLeadCityFilter} disabled={!leadNicheFilter}>
                       <SelectTrigger className="truncate">
-                        <SelectValue placeholder={!leadNicheFilter ? "Select niche first..." : "Select city..."} />
+                        <SelectValue placeholder={!leadNicheFilter ? "Niche first..." : "City..."} />
                       </SelectTrigger>
                       <SelectContent>
                         {cities
@@ -1564,10 +1840,10 @@ export default function ManagerPortal() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="w-[140px] shrink-0">
+                  <div className="w-[120px] shrink-0">
                     <Select value={leadCreatedByFilter} onValueChange={setLeadCreatedByFilter}>
                       <SelectTrigger>
-                        <SelectValue placeholder="Created by..." />
+                        <SelectValue placeholder="Created..." />
                       </SelectTrigger>
                       <SelectContent>
                         {/* Get unique creators from leads */}
@@ -1580,10 +1856,10 @@ export default function ManagerPortal() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="w-[140px] shrink-0">
+                  <div className="w-[120px] shrink-0">
                     <Select value={leadAssignedToFilter} onValueChange={setLeadAssignedToFilter}>
                       <SelectTrigger>
-                        <SelectValue placeholder="Assigned to..." />
+                        <SelectValue placeholder="Caller..." />
                       </SelectTrigger>
                       <SelectContent>
                         {/* Get unique callers from city assignments */}
@@ -1596,6 +1872,19 @@ export default function ManagerPortal() {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="w-[120px] shrink-0">
+                    <Select value={leadStatusFilter} onValueChange={setLeadStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Status..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unactioned">Unactioned</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="declined">Declined</SelectItem>
+                        <SelectItem value="schedule">Scheduled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <Button
                     variant="outline"
                     size="sm"
@@ -1605,8 +1894,9 @@ export default function ManagerPortal() {
                       setLeadCityFilter('')
                       setLeadCreatedByFilter('')
                       setLeadAssignedToFilter('')
+                      setLeadStatusFilter('')
                     }}
-                    className="whitespace-nowrap shrink-0"
+                    className="shrink-0"
                   >
                     Clear All
                   </Button>
@@ -1614,18 +1904,19 @@ export default function ManagerPortal() {
 
                 {/* Table */}
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full text-xs">
                     <thead>
-                      <tr className="border-b border-border">
-                        <th className="text-left px-4 py-2 font-semibold">#</th>
-                        <th className="text-left px-4 py-2 font-semibold">Lead Name</th>
-                        <th className="text-left px-4 py-2 font-semibold">Niche</th>
-                        <th className="text-left px-4 py-2 font-semibold">City</th>
-                        <th className="text-left px-4 py-2 font-semibold">Created At</th>
-                        <th className="text-left px-4 py-2 font-semibold">Created By</th>
-                        <th className="text-left px-4 py-2 font-semibold">Assigned To</th>
-                        <th className="text-left px-4 py-2 font-semibold">Assigned By</th>
-                        <th className="text-left px-4 py-2 font-semibold">Action</th>
+                      <tr className="border-b border-border bg-muted/50">
+                        <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">#</th>
+                        <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">Lead Name</th>
+                        <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">Niche</th>
+                        <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">City</th>
+                        <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">Created At</th>
+                        <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">Actioned At</th>
+                        <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">Created By</th>
+                        <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">Assigned To</th>
+                        <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">Assigned By</th>
+                        <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">Status</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1642,8 +1933,20 @@ export default function ManagerPortal() {
                             const cityAssignment = cityAssignmentsData.find(ca => ca.city_id === lead.city_id)
                             assignedToMatch = cityAssignment?.caller_id === leadAssignedToFilter
                           }
+
+                          // For status filter
+                          let statusMatch = true
+                          if (leadStatusFilter) {
+                            if (leadStatusFilter === 'unactioned') {
+                              // Unactioned means no status or unassigned status
+                              statusMatch = !lead.status || lead.status === 'unassigned'
+                            } else {
+                              const leadStatus = lead.status?.toLowerCase() || ''
+                              statusMatch = leadStatus === leadStatusFilter.toLowerCase()
+                            }
+                          }
                           
-                          return searchMatch && nicheMatch && cityMatch && createdByMatch && assignedToMatch
+                          return searchMatch && nicheMatch && cityMatch && createdByMatch && assignedToMatch && statusMatch
                         })
                         .map((lead, index) => {
                           const niche = niches.find(n => n.id === lead.niche_id)
@@ -1660,9 +1963,37 @@ export default function ManagerPortal() {
                           const lastResponse = leadResponses[lead.id]
 
                           const getActionDisplay = () => {
+                            // First check if lead has a current status (from direct update)
+                            if (lead.status) {
+                              const statusLower = lead.status.toLowerCase()
+                              if (statusLower === 'approved') {
+                                return <Badge className="bg-green-100 text-green-700">Approved</Badge>
+                              }
+                              if (statusLower === 'declined') {
+                                return <Badge className="bg-red-100 text-red-700">Declined</Badge>
+                              }
+                              if (statusLower === 'scheduled') {
+                                if (lead.follow_up_date) {
+                                  const daysRemaining = getRemainingDays(lead.follow_up_date)
+                                  return (
+                                    <span className="text-xs text-amber-600">
+                                      Scheduled - {daysRemaining > 0 ? `${daysRemaining} days` : 'Due'}
+                                    </span>
+                                  )
+                                }
+                                return <Badge className="bg-amber-100 text-amber-700">Scheduled</Badge>
+                              }
+                            }
+                            
+                            // Fallback to last response action if no direct status is set
                             if (!lastResponse) return <span className="text-xs text-muted-foreground">—</span>
                             
-                            const actionText = lastResponse.action?.charAt(0).toUpperCase() + lastResponse.action?.slice(1)
+                            let actionText = lastResponse.action
+                            if (lastResponse.action === 'later') {
+                              actionText = 'Schedule'
+                            } else if (lastResponse.action) {
+                              actionText = lastResponse.action?.charAt(0).toUpperCase() + lastResponse.action?.slice(1)
+                            }
                             
                             if (lastResponse.action === 'later' && lastResponse.scheduled_for) {
                               const daysRemaining = getRemainingDays(lastResponse.scheduled_for)
@@ -1673,11 +2004,14 @@ export default function ManagerPortal() {
                               )
                             }
                             
-                            if (lastResponse.action === 'approve') {
-                              return <Badge className="bg-green-100 text-green-700">{actionText}</Badge>
+                            if (lastResponse.action === 'approve' || lastResponse.action === 'approved') {
+                              return <Badge className="bg-green-100 text-green-700">Approved</Badge>
                             }
-                            if (lastResponse.action === 'decline') {
-                              return <Badge className="bg-red-100 text-red-700">{actionText}</Badge>
+                            if (lastResponse.action === 'decline' || lastResponse.action === 'declined') {
+                              return <Badge className="bg-red-100 text-red-700">Declined</Badge>
+                            }
+                            if (lastResponse.action === 'schedule' || lastResponse.action === 'later') {
+                              return <Badge className="bg-amber-100 text-amber-700">Scheduled</Badge>
                             }
                             
                             return <Badge variant="outline">{actionText}</Badge>
@@ -1685,40 +2019,72 @@ export default function ManagerPortal() {
                           
                           return (
                             <tr key={lead.id} className="border-b border-border hover:bg-muted/50">
-                              <td className="px-4 py-2 font-medium text-muted-foreground">{index + 1}</td>
-                              <td className="px-4 py-2">
+                              <td className="px-2 py-2 font-medium text-muted-foreground text-xs">{index + 1}</td>
+                              <td className="px-2 py-2 whitespace-nowrap">
                                 <button
                                   onClick={() => {
                                     setSelectedLeadForDetails(lead)
                                     setLeadDetailsDialogOpen(true)
                                   }}
-                                  className="text-primary hover:underline cursor-pointer font-medium"
+                                  className="text-primary hover:underline cursor-pointer font-medium text-xs"
                                 >
                                   {lead.data?.name || 'Lead'}
                                 </button>
                               </td>
-                              <td className="px-4 py-2 text-muted-foreground">{niche?.name}</td>
-                              <td className="px-4 py-2 text-muted-foreground">{city?.name}</td>
-                              <td className="px-4 py-2 text-xs text-muted-foreground">{formatDate(lead.created_at)}</td>
-                              <td className="px-4 py-2 text-sm">
-                                <Badge variant="secondary">{lead.creator?.name || 'Unknown'}</Badge>
+                              <td className="px-2 py-2 text-muted-foreground text-xs whitespace-nowrap">{niche?.name}</td>
+                              <td className="px-2 py-2 text-muted-foreground text-xs whitespace-nowrap">{city?.name}</td>
+                              <td className="px-2 py-2 text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(lead.created_at)}</td>
+                              <td className="px-2 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                                {lead.actioned_at ? formatDateTime(lead.actioned_at) : '—'}
                               </td>
-                              <td className="px-4 py-2">
+                              <td className="px-2 py-2 text-xs whitespace-nowrap">
+                                <Badge variant="secondary" className="text-xs">{lead.creator?.name || 'Unknown'}</Badge>
+                              </td>
+                              <td className="px-2 py-2 text-xs whitespace-nowrap">
                                 {assignedCaller ? (
-                                  <Badge variant="outline">{assignedCaller.name}</Badge>
+                                  <Badge variant="outline" className="text-xs">{assignedCaller.name}</Badge>
                                 ) : (
                                   <span className="text-xs text-muted-foreground">Unassigned</span>
                                 )}
                               </td>
-                              <td className="px-4 py-2 text-sm">
+                              <td className="px-2 py-2 text-xs whitespace-nowrap">
                                 {assignedByManager ? (
-                                  <Badge variant="outline" className="bg-blue-50">{assignedByManager.name}</Badge>
+                                  <Badge variant="outline" className="bg-blue-50 text-xs">{assignedByManager.name}</Badge>
                                 ) : (
                                   <span className="text-xs text-muted-foreground">—</span>
                                 )}
                               </td>
-                              <td className="px-4 py-2 text-sm">
-                                {getActionDisplay()}
+                              <td className="px-2 py-2 text-xs whitespace-nowrap">
+                                <div
+                                  onDoubleClick={() => {
+                                    const cityAssignment = cityAssignmentsData.find(ca => ca.city_id === lead.city_id)
+                                    const assignedCaller = cityAssignment ? allUsers.find(u => u.id === cityAssignment.caller_id) : null
+                                    
+                                    // Pre-fill days if lead is scheduled
+                                    let daysValue = ''
+                                    if (lead.status === 'scheduled' && lead.follow_up_date) {
+                                      const followUpDate = new Date(lead.follow_up_date)
+                                      const today = new Date()
+                                      today.setHours(0, 0, 0, 0)
+                                      followUpDate.setHours(0, 0, 0, 0)
+                                      daysValue = Math.max(1, Math.ceil((followUpDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))).toString()
+                                    }
+                                    
+                                    setEditingStatusLeadId(lead.id)
+                                    setStatusUpdate(lead.status === 'scheduled' ? 'schedule' : (lead.status || ''))
+                                    setScheduleDays(daysValue)
+                                    setEditingLeadDetails({
+                                      index: index + 1,
+                                      name: lead.data?.name || 'Lead',
+                                      callerName: assignedCaller?.name || 'Unassigned'
+                                    })
+                                    setStatusDialogOpen(true)
+                                  }}
+                                  className="cursor-pointer hover:opacity-70 transition-opacity py-1"
+                                  title="Double-click to edit"
+                                >
+                                  {getActionDisplay()}
+                                </div>
                               </td>
                             </tr>
                           )
@@ -1732,6 +2098,95 @@ export default function ManagerPortal() {
         </Card>
 
           </TabsContent>
+
+          {/* Status Update Dialog */}
+          <Dialog open={statusDialogOpen} onOpenChange={setStatusDialogOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Update Lead Status</DialogTitle>
+                <DialogDescription>Change the status for the selected lead</DialogDescription>
+              </DialogHeader>
+              
+              <div className="space-y-4">
+                {editingLeadDetails && (
+                  <div className="bg-muted p-3 rounded space-y-1 text-sm">
+                    <div><span className="font-semibold">S.No:</span> {editingLeadDetails.index}</div>
+                    <div><span className="font-semibold">Business Name:</span> {editingLeadDetails.name}</div>
+                    <div><span className="font-semibold">Caller Name:</span> {editingLeadDetails.callerName}</div>
+                  </div>
+                )}
+                
+                <div>
+                  <Label htmlFor="status-select" className="mb-2 block">New Status</Label>
+                  <Select value={statusUpdate} onValueChange={(value) => {
+                    setStatusUpdate(value)
+                    // Clear days when changing from schedule
+                    if (value !== 'schedule') {
+                      setScheduleDays('')
+                    }
+                  }}>
+                    <SelectTrigger id="status-select">
+                      <SelectValue placeholder="Select status..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="declined">Declined</SelectItem>
+                      <SelectItem value="schedule">Schedule Follow-up</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {statusUpdate === 'schedule' && (
+                  <div>
+                    <Label htmlFor="schedule-days" className="mb-2 block">Follow-up Days</Label>
+                    <Input
+                      id="schedule-days"
+                      type="number"
+                      min="1"
+                      max="365"
+                      placeholder="Enter number of days"
+                      value={scheduleDays}
+                      onChange={(e) => setScheduleDays(e.target.value)}
+                      className="w-full"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Number of days from today to schedule the follow-up
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex gap-2 justify-end">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setStatusDialogOpen(false)
+                      setEditingStatusLeadId(null)
+                      setStatusUpdate('')
+                      setScheduleDays('')
+                      setEditingLeadDetails(null)
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="default"
+                    onClick={async () => {
+                      if (editingStatusLeadId && statusUpdate) {
+                        await handleUpdateLeadStatus(editingStatusLeadId, statusUpdate)
+                        setStatusDialogOpen(false)
+                        setEditingLeadDetails(null)
+                      }
+                    }}
+                    disabled={updatingStatus || !statusUpdate || (statusUpdate === 'schedule' && !scheduleDays)}
+                    className="gap-2"
+                  >
+                    {updatingStatus && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {updatingStatus ? 'Updating...' : 'Update'}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
 
           {/* Setup Tab - Add Niches, Cities, and Leads */}
           <TabsContent value="setup" className="space-y-6">
@@ -2180,71 +2635,118 @@ export default function ManagerPortal() {
             {selectedLeadForDetails && (
               <>
                 <DialogHeader>
-                  <DialogTitle className="text-2xl">{selectedLeadForDetails.data?.name || 'Lead Details'}</DialogTitle>
-                  <DialogDescription className="flex items-center gap-2 mt-2">
-                    <Badge variant="outline">
-                      {selectedLeadForDetails.status || 'unassigned'}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">
-                      Created on {formatDate(selectedLeadForDetails.created_at)}
-                    </span>
-                  </DialogDescription>
+                  <div>
+                    <DialogTitle className="text-xl">
+                      {selectedLeadForDetails.data?.name || 'Lead Details'}
+                    </DialogTitle>
+                    <div className="text-xs font-normal text-muted-foreground mt-2 space-y-1">
+                      <div>
+                        {selectedLeadForDetails.niche_id && <span className="font-bold">{niches.find(n => n.id === selectedLeadForDetails.niche_id)?.name || 'Unknown'}</span>}
+                        {selectedLeadForDetails.niche_id && selectedLeadForDetails.city_id && ' • '}
+                        {selectedLeadForDetails.city_id && <span className="font-bold">{cities.find(c => c.id === selectedLeadForDetails.city_id)?.name || 'Unknown'}</span>}
+                        {(selectedLeadForDetails.niche_id || selectedLeadForDetails.city_id) && selectedLeadForDetails.status && ' • '}
+                        {selectedLeadForDetails.status && <Badge variant="outline" className="ml-1">{selectedLeadForDetails.status}</Badge>}
+                      </div>
+                    </div>
+                    <DialogDescription className="flex items-center gap-2 mt-2 text-xs flex-wrap">
+                      <span className="text-muted-foreground">
+                        Created on {formatDate(selectedLeadForDetails.created_at)}
+                      </span>
+                      {leadResponses[selectedLeadForDetails.id] && (
+                        <span className="text-muted-foreground">
+                          • Actioned on {formatDateTime(leadResponses[selectedLeadForDetails.id].created_at)}
+                        </span>
+                      )}
+                    </DialogDescription>
+                  </div>
                 </DialogHeader>
 
                 {/* Lead Data */}
                 <div className="space-y-4">
                   <div>
-                    <h3 className="font-semibold text-sm text-muted-foreground mb-3">Lead Information</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-4">
                       {selectedLeadForDetails.data && Object.keys(selectedLeadForDetails.data).length > 0 ? (
                         <>
-                          {Object.entries(selectedLeadForDetails.data).map(([key, value]) => (
-                            <div key={key}>
-                              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                                {key.replace(/_/g, ' ')}
-                              </label>
-                              <p className="text-sm text-foreground mt-1 whitespace-pre-wrap">{String(value)}</p>
-                            </div>
-                          ))}
-                          {/* Add Niche */}
-                          {selectedLeadForDetails.niche_id && (
-                            <div>
-                              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                                Niche
-                              </label>
-                              <p className="text-sm text-foreground mt-1">
-                                {(() => {
-                                  const niche = niches.find(n => n.id === selectedLeadForDetails.niche_id)
-                                  return niche?.name || 'Unknown'
-                                })()}
-                              </p>
-                            </div>
-                          )}
-                          {/* Add City */}
-                          {selectedLeadForDetails.city_id && (
-                            <div>
-                              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                                City
-                              </label>
-                              <p className="text-sm text-foreground mt-1">
-                                {(() => {
-                                  const city = cities.find(c => c.id === selectedLeadForDetails.city_id)
-                                  return city?.name || 'Unknown'
-                                })()}
-                              </p>
-                            </div>
-                          )}
+                          {Object.entries(selectedLeadForDetails.data)
+                            .filter(([key]) => key.toLowerCase() !== 'name')
+                            .map(([key, value]) => {
+                            const stringValue = String(value)
+                            let parsedEntries: Array<[string, string]> = []
+                            
+                            // Parse key=value pairs from the string
+                            if (stringValue.includes('=') && stringValue.includes(',')) {
+                              parsedEntries = stringValue.split(',').map(pair => {
+                                const [k, v] = pair.split('=').map(s => s.trim())
+                                return [k || '', v || ''] as [string, string]
+                              }).filter(([k]) => k)
+                            } else if (stringValue.includes('=') && !stringValue.includes(',')) {
+                              const [k, v] = stringValue.split('=').map(s => s.trim())
+                              if (k) {
+                                parsedEntries = [[k, v || '']]
+                              }
+                            }
+                            
+                            // If we have parsed entries, display them as separate sections
+                            if (parsedEntries.length > 0) {
+                              return (
+                                <div key={key}>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {parsedEntries.map(([pKey, pValue]) => {
+                                      const valueLines = pValue.includes(';') 
+                                        ? pValue.split(';').map(v => v.trim()).filter(v => v)
+                                        : [pValue]
+                                      
+                                      return (
+                                        <div key={`${key}-${pKey}`} className="pb-3 border-b border-border last:border-b-0">
+                                          <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1 block">
+                                            {pKey.replace(/_/g, ' ')}
+                                          </label>
+                                          <div className="space-y-1">
+                                            {valueLines.map((line, idx) => (
+                                              <p key={idx} className="text-sm text-foreground">
+                                                {line}
+                                              </p>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              )
+                            }
+                            
+                            // Otherwise display as single section
+                            return (
+                              <div key={key} className="pb-3 border-b border-border last:border-b-0">
+                                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1 block">
+                                  {key.replace(/_/g, ' ')}
+                                </label>
+                                {stringValue.includes(';') ? (
+                                  <div className="space-y-1">
+                                    {stringValue.split(';').map((line, idx) => (
+                                      <p key={idx} className="text-sm text-foreground">
+                                        {line.trim()}
+                                      </p>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-sm text-foreground">{stringValue}</p>
+                                )}
+                              </div>
+                            )
+                          })}
+
                         </>
                       ) : (
-                        <p className="text-xs text-muted-foreground col-span-2">No lead details available</p>
+                        <p className="text-xs text-muted-foreground">No lead details available</p>
                       )}
                     </div>
                   </div>
 
                   {/* Creator & Assignment Info */}
-                  <div className="border-t pt-4">
-                    <h3 className="font-semibold text-sm text-muted-foreground mb-3">Assignment Information</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                  <div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
                       <div>
                         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Created By</p>
                         <p className="mt-1">{selectedLeadForDetails.creator?.name || 'Unknown'}</p>

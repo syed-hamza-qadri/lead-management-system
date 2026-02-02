@@ -11,8 +11,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Plus, Trash2, Edit2, LogOut, BarChart3 } from 'lucide-react'
+import { Loader2, Plus, Trash2, Edit2, LogOut, BarChart3, ChevronRight, Eye, EyeOff, RefreshCw } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
 interface Lead {
@@ -22,6 +23,7 @@ interface Lead {
   data: Record<string, any>
   status: string
   created_at: string
+  created_by?: string
 }
 
 interface Niche {
@@ -42,7 +44,7 @@ export default function LeadGenerator() {
   const { session, loading: sessionLoading } = useSession()
 
   const [loading, setLoading] = useState(true)
-  const [leads, setLeads] = useState<Lead[]>([])
+  const [allLeads, setAllLeads] = useState<Lead[]>([])
   const [niches, setNiches] = useState<Niche[]>([])
   const [cities, setCities] = useState<City[]>([])
   const [filteredCities, setFilteredCities] = useState<City[]>([])
@@ -57,6 +59,9 @@ export default function LeadGenerator() {
   const [leadName, setLeadName] = useState('')
   const [leadDetails, setLeadDetails] = useState('')
   
+  // Tab state
+  const [activeTab, setActiveTab] = useState('unassigned')
+  
   // Performance metrics
   const [performanceOpen, setPerformanceOpen] = useState(false)
   const [performance, setPerformance] = useState({ 
@@ -68,9 +73,23 @@ export default function LeadGenerator() {
     conversionRate: 0
   })
   
+  // Actioned leads view
+  const [selectedActionNiche, setSelectedActionNiche] = useState<string>('')
+  const [selectedActionCity, setSelectedActionCity] = useState<string>('')
+  const [filteredActionCities, setFilteredActionCities] = useState<City[]>([])
+  
   // Lead details dialog
   const [selectedLeadForDetails, setSelectedLeadForDetails] = useState<any>(null)
   const [leadDetailsDialogOpen, setLeadDetailsDialogOpen] = useState(false)
+  
+  // Delete confirmation
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [leadToDelete, setLeadToDelete] = useState<string | null>(null)
+  const [deletePassword, setDeletePassword] = useState('')
+  const [showDeletePassword, setShowDeletePassword] = useState(false)
+
+  // Reload loading state
+  const [reloading, setReloading] = useState(false)
 
   useEffect(() => {
     if (!sessionLoading && !session) {
@@ -82,6 +101,7 @@ export default function LeadGenerator() {
     }
   }, [session, sessionLoading, router])
 
+  // Filter cities by selected niche for new lead creation
   useEffect(() => {
     if (selectedNiche) {
       const filtered = cities.filter(c => c.niche_id === selectedNiche)
@@ -89,6 +109,15 @@ export default function LeadGenerator() {
       setSelectedCity('')
     }
   }, [selectedNiche, cities])
+
+  // Filter cities by selected niche for actioned leads view
+  useEffect(() => {
+    if (selectedActionNiche) {
+      const filtered = cities.filter(c => c.niche_id === selectedActionNiche)
+      setFilteredActionCities(filtered)
+      setSelectedActionCity('')
+    }
+  }, [selectedActionNiche, cities])
 
   const fetchData = async () => {
     try {
@@ -118,8 +147,7 @@ export default function LeadGenerator() {
 
       setNiches(nichesData || [])
       setCities(citiesData || [])
-      // Limit leads to first 100 for initial load (pagination)
-      setLeads((leadsData || []).slice(0, 100))
+      setAllLeads((leadsData || []).slice(0, 500))
 
       // Calculate performance metrics for this lead generator
       let approved = 0, declined = 0, scheduled = 0
@@ -162,6 +190,69 @@ export default function LeadGenerator() {
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleReloadTabs = async () => {
+    try {
+      setReloading(true)
+      if (!session?.user_id) return
+
+      // Filter leads to only show those created by current user
+      const { data: leadsData } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('created_by', session.user_id)
+        .order('created_at', { ascending: false })
+
+      setAllLeads((leadsData || []).slice(0, 500))
+
+      // Calculate performance metrics for this lead generator
+      let approved = 0, declined = 0, scheduled = 0
+      const leadsWithAction = new Set<string>()
+      
+      // Get all responses for this generator's leads
+      const leadIds = (leadsData || []).map((l: any) => l.id)
+      if (leadIds.length > 0) {
+        const { data: responses } = await supabase
+          .from('lead_responses')
+          .select('lead_id, action')
+          .in('lead_id', leadIds)
+        
+        ;(responses || []).forEach((r: any) => {
+          leadsWithAction.add(r.lead_id)
+          if (r.action === 'approve') approved++
+          else if (r.action === 'decline') declined++
+          else if (r.action === 'later') scheduled++
+        })
+      }
+      
+      const pending = (leadsData || []).length - leadsWithAction.size
+      const total = approved + declined + scheduled
+      const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
+      
+      setPerformance({
+        added: (leadsData || []).length,
+        approved,
+        declined,
+        scheduled,
+        pending,
+        conversionRate
+      })
+
+      toast({
+        title: 'Success',
+        description: 'Tabs reloaded successfully',
+      })
+    } catch (error) {
+      console.error('Error reloading tabs:', error)
+      toast({
+        title: 'Error',
+        description: 'Failed to reload tabs',
+        variant: 'destructive',
+      })
+    } finally {
+      setReloading(false)
     }
   }
 
@@ -278,18 +369,68 @@ export default function LeadGenerator() {
   }
 
   const handleDeleteLead = async (leadId: string) => {
+    setLeadToDelete(leadId)
+    setDeletePassword('')
+    setShowDeletePassword(false)
+    setDeleteConfirmOpen(true)
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!leadToDelete || !deletePassword) {
+      toast({
+        title: 'Error',
+        description: 'Please enter your password',
+        variant: 'destructive',
+      })
+      return
+    }
+
     try {
-      const { error } = await supabase
+      // Get current user's password hash for verification
+      if (!session?.user_id) {
+        throw new Error('Session not found')
+      }
+
+      // Fetch current user to verify password
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('password')
+        .eq('id', session.user_id)
+        .single()
+
+      if (userError || !userData) {
+        throw new Error('Unable to verify credentials')
+      }
+
+      // Import comparePassword from lib
+      const { comparePassword } = await import('@/lib/password')
+      const passwordMatch = await comparePassword(deletePassword, userData.password)
+
+      if (!passwordMatch) {
+        toast({
+          title: 'Error',
+          description: 'Incorrect password',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      // Delete the lead
+      const { error: deleteError } = await supabase
         .from('leads')
         .delete()
-        .eq('id', leadId)
+        .eq('id', leadToDelete)
 
-      if (error) throw error
+      if (deleteError) throw deleteError
 
       toast({
         title: 'Success',
         description: 'Lead deleted successfully',
       })
+
+      setDeleteConfirmOpen(false)
+      setLeadToDelete(null)
+      setDeletePassword('')
       fetchData()
     } catch (error) {
       console.error('Error:', error)
@@ -335,6 +476,17 @@ export default function LeadGenerator() {
     )
   }
 
+  // Helper function to get unassigned leads
+  const unassignedLeads = allLeads.filter(l => l.status === 'unassigned')
+  
+  // Helper function to get actioned leads
+  const actionedLeads = allLeads.filter(l => l.status !== 'unassigned')
+  
+  // Helper function to get actioned leads for selected city
+  const actionedLeadsInCity = selectedActionCity 
+    ? actionedLeads.filter(l => l.city_id === selectedActionCity)
+    : actionedLeads
+
   return (
     <main className="min-h-screen bg-background p-8">
       <div className="max-w-6xl mx-auto">
@@ -345,6 +497,10 @@ export default function LeadGenerator() {
             <p className="text-muted-foreground mt-2">Create and manage leads across niches and cities</p>
           </div>
           <div className="flex gap-2">
+            <Button variant="outline" onClick={handleReloadTabs} disabled={reloading} className="flex items-center gap-2">
+              <RefreshCw className={`w-4 h-4 ${reloading ? 'animate-spin' : ''}`} />
+              Reload
+            </Button>
             <Button variant="outline" onClick={() => setPerformanceOpen(true)} className="flex items-center gap-2">
               <BarChart3 className="w-4 h-4" />
               Status
@@ -481,72 +637,262 @@ export default function LeadGenerator() {
           </DialogContent>
         </Dialog>
 
-        {/* Leads List */}
-        <Card>
-          <CardContent className="p-0">
-            {leads.length === 0 ? (
-              <div className="text-center py-12">
-                <p className="text-muted-foreground">No leads created yet</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-border">
-                      <th className="text-left px-6 py-3 font-semibold">Name</th>
-                      <th className="text-left px-6 py-3 font-semibold">Niche</th>
-                      <th className="text-left px-6 py-3 font-semibold">City</th>
-                      <th className="text-left px-6 py-3 font-semibold">Details</th>
-                      <th className="text-left px-6 py-3 font-semibold">Created At</th>
-                      <th className="text-left px-6 py-3 font-semibold">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {leads.map(lead => {
-                      const niche = niches.find(n => n.id === lead.niche_id)
-                      const city = cities.find(c => c.id === lead.city_id)
-                      const createdDate = new Date(lead.created_at).toLocaleDateString()
-                      return (
-                        <tr key={lead.id} className="border-b border-border hover:bg-muted/50 transition-colors">
-                          <td className="px-6 py-4 font-medium cursor-pointer text-primary hover:underline" onClick={() => {
-                            setSelectedLeadForDetails(lead)
-                            setLeadDetailsDialogOpen(true)
-                          }}>{lead.data.name}</td>
-                          <td className="px-6 py-4 text-sm">{niche?.name}</td>
-                          <td className="px-6 py-4 text-sm">{city?.name}</td>
-                          <td className="px-6 py-4 text-sm text-muted-foreground whitespace-pre-wrap max-w-xs">{truncateDetails(lead.data.details)}</td>
-                          <td className="px-6 py-4 text-sm">{createdDate}</td>
-                          <td className="px-6 py-4">
-                            <div className="flex gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleEditLead(lead)}
-                                className="flex items-center gap-1"
-                              >
-                                <Edit2 className="w-4 h-4" />
-                                Edit
-                              </Button>
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={() => handleDeleteLead(lead.id)}
-                                className="flex items-center gap-1"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                                Delete
-                              </Button>
-                            </div>
+        {/* Tabs Section */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-12">
+          <TabsList className="grid w-full max-w-md grid-cols-2">
+            <TabsTrigger value="unassigned" disabled={reloading} className="flex items-center gap-2">
+              New Leads
+              {reloading && <Loader2 className="w-4 h-4 animate-spin" />}
+            </TabsTrigger>
+            <TabsTrigger value="actioned" disabled={reloading} className="flex items-center gap-2">
+              Actioned Leads
+              {reloading && <Loader2 className="w-4 h-4 animate-spin" />}
+            </TabsTrigger>
+          </TabsList>
+
+          {/* Unassigned Leads Tab */}
+          <TabsContent value="unassigned" className="mt-6">
+            <Card>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="text-left px-6 py-3 font-semibold w-12">#</th>
+                        <th className="text-left px-6 py-3 font-semibold">Name</th>
+                        <th className="text-left px-6 py-3 font-semibold">Niche</th>
+                        <th className="text-left px-6 py-3 font-semibold">City</th>
+                        <th className="text-left px-6 py-3 font-semibold">Details</th>
+                        <th className="text-left px-6 py-3 font-semibold">Created At</th>
+                        <th className="text-left px-6 py-3 font-semibold">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {unassignedLeads.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="text-center py-12">
+                            <p className="text-muted-foreground">No new leads yet</p>
                           </td>
                         </tr>
+                      ) : (
+                      unassignedLeads.map((lead, index) => {
+                        const niche = niches.find(n => n.id === lead.niche_id)
+                        const city = cities.find(c => c.id === lead.city_id)
+                        const createdDate = new Date(lead.created_at).toLocaleString()
+                        return (
+                          <tr key={lead.id} className="border-b border-border hover:bg-muted/50 transition-colors">
+                            <td className="px-6 py-4 text-sm font-medium text-muted-foreground">{index + 1}</td>
+                            <td className="px-6 py-4 font-medium cursor-pointer text-primary hover:underline" onClick={() => {
+                              setSelectedLeadForDetails(lead)
+                              setLeadDetailsDialogOpen(true)
+                            }}>{lead.data.name}</td>
+                            <td className="px-6 py-4 text-sm">{niche?.name}</td>
+                            <td className="px-6 py-4 text-sm">{city?.name}</td>
+                            <td className="px-6 py-4 text-sm text-muted-foreground whitespace-pre-wrap max-w-xs">{truncateDetails(lead.data.details)}</td>
+                            <td className="px-6 py-4 text-sm">{createdDate}</td>
+                            <td className="px-6 py-4">
+                              <div className="flex gap-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleEditLead(lead)}
+                                  className="flex items-center gap-1"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                  Edit
+                                </Button>
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
+                                  onClick={() => handleDeleteLead(lead.id)}
+                                  className="flex items-center gap-1"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                  Delete
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+            </CardContent>
+          </Card>
+          </TabsContent>
+
+          {/* Actioned Leads Tab */}
+          <TabsContent value="actioned" className="mt-6">
+            {actionedLeads.length === 0 ? (
+              <Card>
+                <CardContent className="p-12 text-center">
+                  <p className="text-muted-foreground">No actioned leads yet</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-6">
+                {/* Niche Selection - Card View */}
+                <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-foreground">Select Niche</h3>
+              {(() => {
+                const nichesWithActionedLeads = niches.filter(niche => 
+                  actionedLeads.some(l => l.niche_id === niche.id)
+                )
+                
+                return nichesWithActionedLeads.length === 0 ? (
+                  <Card>
+                    <CardContent className="p-12 text-center">
+                      <p className="text-muted-foreground">No actioned leads available.</p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {nichesWithActionedLeads.map(niche => {
+                      const nicheActionedCount = actionedLeads.filter(l => l.niche_id === niche.id).length
+                      return (
+                        <Card
+                          key={niche.id}
+                          className={`cursor-pointer hover:shadow-lg transition-shadow ${selectedActionNiche === niche.id ? 'ring-2 ring-primary' : ''}`}
+                          onClick={() => {
+                            if (selectedActionNiche === niche.id) {
+                              setSelectedActionNiche('')
+                              setSelectedActionCity('')
+                            } else {
+                              setSelectedActionNiche(niche.id)
+                            }
+                          }}
+                        >
+                          <CardHeader>
+                            <CardTitle className="text-lg">{niche.name}</CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm text-muted-foreground">
+                                {nicheActionedCount} actioned lead{nicheActionedCount !== 1 ? 's' : ''}
+                              </span>
+                              <ChevronRight className={`w-4 h-4 transition-transform ${selectedActionNiche === niche.id ? 'rotate-90' : ''}`} />
+                            </div>
+                          </CardContent>
+                        </Card>
                       )
                     })}
-                  </tbody>
-                </table>
+                  </div>
+                )
+              })()}
+                </div>
+
+                {/* City Selection - Card View */}
+                {selectedActionNiche && (
+                  <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-foreground">
+                  Cities in {niches.find(n => n.id === selectedActionNiche)?.name}
+                </h3>
+                {(() => {
+                  const citiesWithActionedLeads = filteredActionCities.filter(city =>
+                    actionedLeads.some(l => l.city_id === city.id)
+                  )
+                  
+                  return citiesWithActionedLeads.length === 0 ? (
+                    <Card>
+                      <CardContent className="p-12 text-center">
+                        <p className="text-muted-foreground">No actioned leads in this niche.</p>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {citiesWithActionedLeads.map(city => {
+                        const cityActionedCount = actionedLeads.filter(l => l.city_id === city.id).length
+                        return (
+                          <Card
+                            key={city.id}
+                            className={`cursor-pointer hover:shadow-lg transition-shadow ${selectedActionCity === city.id ? 'ring-2 ring-primary' : ''}`}
+                            onClick={() => setSelectedActionCity(selectedActionCity === city.id ? '' : city.id)}
+                          >
+                            <CardHeader>
+                              <CardTitle className="text-lg">{city.name}</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm text-muted-foreground">
+                                  {cityActionedCount} actioned lead{cityActionedCount !== 1 ? 's' : ''}
+                                </span>
+                                <ChevronRight className={`w-4 h-4 transition-transform ${selectedActionCity === city.id ? 'rotate-90' : ''}`} />
+                              </div>
+                            </CardContent>
+                          </Card>
+                        )
+                      })}
+                    </div>
+                  )
+                })()}
+                  </div>
+                )}
+
+                {/* Actioned Leads Table */}
+                {selectedActionCity && (
+                  <div className="space-y-4 mt-8">
+                <h3 className="text-lg font-semibold text-foreground">
+                  Actioned Leads in {cities.find(c => c.id === selectedActionCity)?.name}
+                </h3>
+                
+                <Card>
+                  <CardContent className="p-0">
+                    {actionedLeadsInCity.length === 0 ? (
+                      <div className="text-center py-12">
+                        <p className="text-muted-foreground">No actioned leads in this city</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead>
+                            <tr className="border-b border-border">
+                              <th className="text-left px-6 py-3 font-semibold w-12">#</th>
+                              <th className="text-left px-6 py-3 font-semibold">Name</th>
+                              <th className="text-left px-6 py-3 font-semibold">Created At</th>
+                              <th className="text-left px-6 py-3 font-semibold">Details</th>
+                              <th className="text-left px-6 py-3 font-semibold">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {actionedLeadsInCity.map((lead, index) => {
+                              const createdDate = new Date(lead.created_at).toLocaleString()
+                              const statusColor = {
+                                'approved': 'bg-green-100 text-green-700',
+                                'declined': 'bg-red-100 text-red-700',
+                                'scheduled': 'bg-yellow-100 text-yellow-700',
+                              }[lead.status] || 'bg-gray-100 text-gray-700'
+                              
+                              return (
+                                <tr key={lead.id} className="border-b border-border hover:bg-muted/50 transition-colors">
+                                  <td className="px-6 py-4 text-sm font-medium text-muted-foreground">{index + 1}</td>
+                                  <td className="px-6 py-4 font-medium cursor-pointer text-primary hover:underline" onClick={() => {
+                                    setSelectedLeadForDetails(lead)
+                                    setLeadDetailsDialogOpen(true)
+                                  }}>{lead.data.name}</td>
+                                  <td className="px-6 py-4 text-sm">{createdDate}</td>
+                                  <td className="px-6 py-4 text-sm text-muted-foreground whitespace-pre-wrap max-w-xs">{truncateDetails(lead.data.details)}</td>
+                                  <td className="px-6 py-4">
+                                    <Badge className={statusColor}>
+                                      {lead.status.charAt(0).toUpperCase() + lead.status.slice(1)}
+                                    </Badge>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+                  </div>
+                )}
               </div>
             )}
-          </CardContent>
-        </Card>
+          </TabsContent>
+        </Tabs>
 
         {/* Lead Details Dialog */}
         <Dialog open={leadDetailsDialogOpen} onOpenChange={setLeadDetailsDialogOpen}>
@@ -557,7 +903,7 @@ export default function LeadGenerator() {
             {selectedLeadForDetails && (() => {
               const niche = niches.find(n => n.id === selectedLeadForDetails.niche_id)
               const city = cities.find(c => c.id === selectedLeadForDetails.city_id)
-              const createdDate = new Date(selectedLeadForDetails.created_at).toLocaleDateString()
+              const createdDate = new Date(selectedLeadForDetails.created_at).toLocaleString()
               return (
                 <div className="space-y-6">
                   {/* Metadata */}
@@ -662,6 +1008,60 @@ export default function LeadGenerator() {
                 </div>
               )
             })()}
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Confirm Delete</DialogTitle>
+              <DialogDescription>Enter your password to confirm lead deletion</DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="delete-password" className="mb-2 block">Password</Label>
+                <div className="relative">
+                  <Input
+                    id="delete-password"
+                    type={showDeletePassword ? 'text' : 'password'}
+                    placeholder="Enter your password"
+                    value={deletePassword}
+                    onChange={(e) => setDeletePassword(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleConfirmDelete()}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowDeletePassword(!showDeletePassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showDeletePassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setDeleteConfirmOpen(false)
+                    setLeadToDelete(null)
+                    setDeletePassword('')
+                  }}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={handleConfirmDelete}
+                  className="flex-1"
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
           </DialogContent>
         </Dialog>
       </div>

@@ -138,9 +138,9 @@ export default function CallerPortal() {
         
         ;(responses || []).forEach((r: any) => {
           leadsWithAction.add(r.lead_id)
-          if (r.action === 'approve') approved++
-          else if (r.action === 'decline') declined++
-          else if (r.action === 'later') scheduled++
+          if (r.action === 'approve' || r.action === 'approved') approved++
+          else if (r.action === 'decline' || r.action === 'declined') declined++
+          else if (r.action === 'later' || r.action === 'scheduled') scheduled++
         })
       }
       
@@ -184,25 +184,39 @@ export default function CallerPortal() {
       if (!session?.user_id) {
         throw new Error('Session not found')
       }
+      
+      // Map action values - normalize 'schedule' to 'scheduled'
+      const mappedAction = action === 'schedule' ? 'scheduled' : action
       const userId = session.user_id
       
-      // Create lead response
+      // Calculate follow_up_date if scheduling (default to 6 days from now)
+      let followUpDate = null
+      if (action === 'schedule') {
+        const date = new Date()
+        date.setDate(date.getDate() + 6)
+        followUpDate = date.toISOString()
+      }
+      
+      // Create lead response with actioned_at automatically set by database trigger
       const { error: responseError } = await supabase
         .from('lead_responses')
         .insert({
           lead_id: selectedLead.id,
           employee_id: userId,
-          action: action,
+          action: mappedAction,
           response_text: responseNotes,
-          scheduled_for: action === 'schedule' ? new Date().toISOString() : null,
+          scheduled_for: followUpDate
         })
 
       if (responseError) throw responseError
 
-      // Update lead status
+      // Update lead status and follow_up_date (actioned_at is automatically set by database trigger)
       const { error: updateError } = await supabase
         .from('leads')
-        .update({ status: action })
+        .update({ 
+          status: mappedAction,
+          follow_up_date: followUpDate
+        })
         .eq('id', selectedLead.id)
 
       if (updateError) throw updateError
@@ -212,14 +226,14 @@ export default function CallerPortal() {
         .from('activity_log')
         .insert({
           user_id: userId,
-          action_type: `lead_${action}`,
+          action_type: `lead_${mappedAction}`,
           lead_id: selectedLead.id,
-          description: `Caller ${action}ed lead: ${selectedLead.data.name}`,
+          description: `Caller ${mappedAction}ed lead: ${selectedLead.data.name}`,
         })
 
       toast({
         title: 'Success',
-        description: `Lead ${action}ed successfully`,
+        description: `Lead ${mappedAction}ed successfully`,
       })
 
       setDetailsOpen(false)
@@ -227,10 +241,12 @@ export default function CallerPortal() {
       setActionStatus('')
       fetchData()
     } catch (error) {
-      console.error('Error:', error)
+      const errorMessage = error instanceof Error ? error.message : JSON.stringify(error)
+      console.error('Error taking action:', errorMessage)
+      console.error('Error details:', error)
       toast({
         title: 'Error',
-        description: 'Failed to process action',
+        description: errorMessage || 'Failed to process action',
         variant: 'destructive',
       })
     } finally {

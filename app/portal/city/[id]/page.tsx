@@ -64,7 +64,7 @@ export default function LeadList() {
       // Get leads for this city
       const { data, error } = await supabase
         .from('leads')
-        .select('id, data, status, created_at')
+        .select('id, data, status, created_at, follow_up_date')
         .eq('city_id', cityId)
         .order('created_at', { ascending: false })
         .limit(100) // Add pagination
@@ -92,9 +92,9 @@ export default function LeadList() {
       const leadsWithAction = new Set<string>()
       ;(responseData || []).forEach((response: any) => {
         leadsWithAction.add(response.lead_id)
-        if (response.action === 'approve') approved++
-        else if (response.action === 'decline') declined++
-        else if (response.action === 'later') scheduled++
+        if (response.action === 'approve' || response.action === 'approved') approved++
+        else if (response.action === 'decline' || response.action === 'declined') declined++
+        else if (response.action === 'later' || response.action === 'scheduled') scheduled++
       })
       
       const pending = (data || []).length - leadsWithAction.size
@@ -102,12 +102,11 @@ export default function LeadList() {
 
       // Enrich leads using map (no additional queries)
       const enrichedLeads = (data || []).map((lead: any) => {
-        const scheduledFor = scheduledMap.get(lead.id)
         let daysRemaining = 0
         let wasLater = false
 
-        if (lead.status === 'scheduled' && scheduledFor) {
-          const scheduledDate = new Date(scheduledFor)
+        if (lead.status === 'scheduled' && lead.follow_up_date) {
+          const scheduledDate = new Date(lead.follow_up_date)
           const today = new Date()
           today.setHours(0, 0, 0, 0)
           scheduledDate.setHours(0, 0, 0, 0)
@@ -125,7 +124,7 @@ export default function LeadList() {
           }
         }
 
-        return { ...lead, scheduled_for: scheduledFor, daysRemaining, was_later: wasLater }
+        return { ...lead, daysRemaining, was_later: wasLater }
       })
 
       // Sort: was_later leads first (top), then scheduled by days remaining, then by creation date

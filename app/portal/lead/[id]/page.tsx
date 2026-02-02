@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, ArrowLeft, Mic, MicOff } from 'lucide-react'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Loader2, ArrowLeft, Mic, MicOff, Check } from 'lucide-react'
 import { useSession } from '@/lib/session'
 
 interface Lead {
@@ -29,6 +30,13 @@ interface PreviousResponse {
   action: string
   response_text: string
   scheduled_for: string | null
+  created_at: string
+  actioned_at?: string
+  employee_id: string
+}
+
+interface ResponseHistory extends PreviousResponse {
+  employee_name?: string
 }
 
 export default function LeadDetail() {
@@ -43,10 +51,17 @@ export default function LeadDetail() {
   const [response, setResponse] = useState('')
   const [daysToLater, setDaysToLater] = useState('7')
   const [previousResponse, setPreviousResponse] = useState<PreviousResponse | null>(null)
+  const [responseHistory, setResponseHistory] = useState<ResponseHistory[]>([])
   const [isUpdating, setIsUpdating] = useState(false)
   const [nextLeadId, setNextLeadId] = useState<string | null>(null)
   const [cityId, setCityId] = useState<string | null>(null)
   const [isListening, setIsListening] = useState(false)
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
+  const [confirmedAction, setConfirmedAction] = useState<{
+    action: string
+    notes: string
+    days?: number
+  } | null>(null)
   const supabase = getSupabaseClient()
   const { userId, token, loading: sessionLoading } = useSession()
 
@@ -66,33 +81,65 @@ export default function LeadDetail() {
         data.city_name = data.cities?.name
 
         // Get scheduled_for if status is scheduled
-        if (data.status === 'scheduled') {
-          const { data: responseData } = await supabase
-            .from('lead_responses')
-            .select('scheduled_for')
-            .eq('lead_id', leadId)
-            .eq('action', 'later')
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .single()
+        if (data.status === 'scheduled' && data.follow_up_date) {
+          const scheduledDate = new Date(data.follow_up_date)
+          const today = new Date()
+          today.setHours(0, 0, 0, 0)
+          scheduledDate.setHours(0, 0, 0, 0)
+          const daysRemaining = Math.ceil((scheduledDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 
-          if (responseData?.scheduled_for) {
-            const scheduledDate = new Date(responseData.scheduled_for)
-            const today = new Date()
-            today.setHours(0, 0, 0, 0)
-            scheduledDate.setHours(0, 0, 0, 0)
-            const daysRemaining = Math.ceil((scheduledDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-
-            data.scheduledFor = responseData.scheduled_for
-            data.daysRemaining = daysRemaining
-          }
+          data.scheduledFor = data.follow_up_date
+          data.daysRemaining = daysRemaining
         }
 
-        // Fetch previous response if this lead has been assigned (only if userId is available)
+        // Fetch all responses for history (ALL users, not just current user)
+        const { data: allResponses } = await supabase
+          .from('lead_responses')
+          .select('id, action, response_text, scheduled_for, created_at, actioned_at, employee_id')
+          .eq('lead_id', leadId)
+          .order('actioned_at', { ascending: false })
+        
+        if (allResponses && allResponses.length > 0) {
+          // Get unique employee IDs
+          const employeeIds = Array.from(new Set(allResponses.map(r => r.employee_id)))
+          
+          // Fetch employee names
+          const { data: employees } = await supabase
+            .from('users')
+            .select('id, name')
+            .in('id', employeeIds)
+          
+          const employeeMap = new Map(employees?.map(e => [e.id, e.name]) || [])
+          
+          // Enrich responses with employee names
+          const enrichedHistory = allResponses.map(response => ({
+            ...response,
+            employee_name: employeeMap.get(response.employee_id) || 'Unknown'
+          })) as ResponseHistory[]
+          
+          setResponseHistory(enrichedHistory)
+        }
+        
+        // Select action based on CURRENT LEAD STATUS only
+        // Don't select anything for unassigned leads
+        if (data.status === 'approved') {
+          setAction('approve')
+        } else if (data.status === 'declined') {
+          setAction('decline')
+        } else if (data.status === 'scheduled') {
+          setAction('later')
+          // Pre-fill days from follow_up_date
+          if (data.daysRemaining !== undefined) {
+            setDaysToLater(Math.max(1, data.daysRemaining).toString())
+          }
+        }
+        // For 'unassigned' status or 'Later - Unassigned', don't select any action
+        
+        // Fetch previous response for current user to pre-fill notes only
         if (userId) {
           const { data: prevResponseData } = await supabase
             .from('lead_responses')
-            .select('id, action, response_text, scheduled_for')
+            .select('id, action, response_text, scheduled_for, created_at, employee_id')
             .eq('lead_id', leadId)
             .eq('employee_id', userId)
             .order('created_at', { ascending: false })
@@ -100,15 +147,9 @@ export default function LeadDetail() {
             .single()
 
           if (prevResponseData) {
-            setPreviousResponse(prevResponseData)
-            setAction(prevResponseData.action as 'approve' | 'decline' | 'later')
+            setPreviousResponse(prevResponseData as PreviousResponse)
+            // Only pre-fill notes, not the action
             setResponse(prevResponseData.response_text || '')
-            if (prevResponseData.action === 'later' && prevResponseData.scheduled_for) {
-              const scheduledDate = new Date(prevResponseData.scheduled_for)
-              const today = new Date()
-              const days = Math.ceil((scheduledDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-              setDaysToLater(Math.max(1, days).toString())
-            }
           }
         }
 
@@ -173,11 +214,24 @@ export default function LeadDetail() {
 
     setResponding(true)
     try {
-      // Prepare response data
+      // Map action to valid database action values
+      const actionMap: Record<string, string> = {
+        'approve': 'approved',
+        'decline': 'declined',
+        'later': 'scheduled',
+        'response': 'response',
+      }
+      
+      const mappedAction = actionMap[action] || action
+      
+      // Prepare response data with proper action value
+      const followUpDate = (action === 'later' || action === 'scheduled') ? new Date(Date.now() + (parseInt(daysToLater) || 7) * 24 * 60 * 60 * 1000).toISOString() : null
+      
       const responseData = {
         response_text: response,
-        action: action,
-        scheduled_for: action === 'later' ? new Date(Date.now() + (parseInt(daysToLater) || 7) * 24 * 60 * 60 * 1000).toISOString() : null,
+        action: mappedAction,
+        scheduled_for: followUpDate,
+        // actioned_at is automatically set by database trigger
       }
 
       // Either update existing response or create new one
@@ -206,7 +260,7 @@ export default function LeadDetail() {
         }
       }
 
-      // Map action to status value
+      // Map action to status value (same as action for these statuses)
       const statusMap: Record<string, string> = {
         'approve': 'approved',
         'decline': 'declined',
@@ -214,10 +268,13 @@ export default function LeadDetail() {
         'response': 'unassigned',
       }
 
-      // Update lead status
+      // Update lead status and follow_up_date (actioned_at is automatically set by database trigger)
       const { error: updateError } = await supabase
         .from('leads')
-        .update({ status: statusMap[action] || action })
+        .update({ 
+          status: statusMap[action] || action,
+          follow_up_date: followUpDate
+        })
         .eq('id', leadId)
 
       if (updateError) {
@@ -240,19 +297,13 @@ export default function LeadDetail() {
         // Don't throw - activity log is not critical
       }
 
-      toast({
-        title: 'Success',
-        description: `Lead ${previousResponse ? 'updated' : 'marked'} as ${action}`,
+      // Show confirmation dialog instead of navigating immediately
+      setConfirmedAction({
+        action: action,
+        notes: response,
+        days: action === 'later' ? parseInt(daysToLater) : undefined
       })
-      
-      // Navigate to next unassigned lead if available, otherwise go to city page assigned tab
-      if (nextLeadId) {
-        router.push(`/portal/lead/${nextLeadId}`)
-      } else if (cityId) {
-        router.push(`/portal/city/${cityId}?tab=assigned`)
-      } else {
-        router.back()
-      }
+      setConfirmDialogOpen(true)
     } catch (error) {
       console.error('[v0] Error handling action:', error)
       const errorMessage = error instanceof Error ? error.message : 'Failed to process action'
@@ -264,6 +315,26 @@ export default function LeadDetail() {
     } finally {
       setResponding(false)
     }
+  }
+
+  const handleConfirmAction = () => {
+    toast({
+      title: 'Success',
+      description: `Lead ${previousResponse ? 'updated' : 'marked'} as ${confirmedAction?.action}`,
+    })
+
+    // Close dialog and navigate to next unassigned lead if available, otherwise go to city page assigned tab
+    setConfirmDialogOpen(false)
+    
+    setTimeout(() => {
+      if (nextLeadId) {
+        router.push(`/portal/lead/${nextLeadId}`)
+      } else if (cityId) {
+        router.push(`/portal/city/${cityId}?tab=assigned`)
+      } else {
+        router.back()
+      }
+    }, 300) // Small delay to allow dialog to close smoothly
   }
 
   const startVoiceRecording = () => {
@@ -763,22 +834,60 @@ export default function LeadDetail() {
                   </Button>
                 )}
 
-                {/* Previous Response Section */}
-                {previousResponse && (
+                {/* Response History Section */}
+                {responseHistory.length > 0 && (
                   <>
                     <div className="border-t border-slate-300 mt-6 pt-6">
-                      <p className="text-sm font-semibold text-foreground mb-4">Previous Response</p>
-                      <div className="text-sm space-y-3">
-                        <div>
-                          <p className="text-xs font-semibold text-muted-foreground mb-1">Action Taken</p>
-                          <p className="font-semibold text-foreground capitalize">{previousResponse.action}</p>
-                        </div>
-                        {previousResponse.response_text && (
-                          <div>
-                            <p className="text-xs font-semibold text-muted-foreground mb-1">Notes</p>
-                            <p className="text-foreground">{previousResponse.response_text}</p>
-                          </div>
-                        )}
+                      <div className="flex items-center justify-between mb-4">
+                        <p className="text-sm font-semibold text-foreground">Response History</p>
+                        <Badge variant="outline" className="bg-slate-100">
+                          {responseHistory.length} {responseHistory.length === 1 ? 'task' : 'tasks'}
+                        </Badge>
+                      </div>
+                      <div className="space-y-4 max-h-96 overflow-y-auto">
+                        {responseHistory.map((response, index) => {
+                          const actionDisplay = response.action === 'scheduled' || response.action === 'later' ? 'Scheduled' : response.action?.charAt(0).toUpperCase() + response.action?.slice(1)
+                          const responseDate = new Date(response.actioned_at || response.created_at)
+                          const formattedDate = responseDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+                          const formattedTime = responseDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                          const taskNumber = responseHistory.length - index  // Latest is #1
+                          
+                          return (
+                            <div key={response.id} className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                              <div className="flex items-center justify-between gap-3 mb-3">
+                                <div className="flex items-center gap-3">
+                                  <Badge 
+                                    className={`text-xs font-semibold ${
+                                      actionDisplay === 'Approve' ? 'bg-green-100 text-green-700' :
+                                      actionDisplay === 'Decline' ? 'bg-red-100 text-red-700' :
+                                      actionDisplay === 'Scheduled' ? 'bg-yellow-100 text-yellow-700' :
+                                      'bg-gray-100 text-gray-700'
+                                    }`}
+                                  >
+                                    #{taskNumber} {actionDisplay}
+                                  </Badge>
+                                  <p className="text-xs text-muted-foreground">
+                                    By: <span className="text-foreground">{response.employee_name}</span>
+                                  </p>
+                                </div>
+                              </div>
+                              <p className="text-xs text-muted-foreground mb-2">
+                                📅 {formattedDate} at {formattedTime}
+                              </p>
+                              {response.response_text && (
+                                <div className="bg-white p-3 rounded border border-slate-200 mb-2">
+                                  <p className="text-xs font-semibold text-muted-foreground mb-1">Notes</p>
+                                  <p className="text-xs text-foreground leading-relaxed">{response.response_text}</p>
+                                </div>
+                              )}
+                              {(response.action === 'scheduled' || response.action === 'later') && response.scheduled_for && (
+                                <div className="text-xs text-amber-600 font-semibold">
+                                  ⏰ Follow-up: {new Date(response.scheduled_for).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   </>
@@ -787,6 +896,74 @@ export default function LeadDetail() {
             </Card>
           </div>
         </div>
+
+        {/* Confirmation Dialog */}
+        <Dialog open={confirmDialogOpen} onOpenChange={setConfirmDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Check className="w-5 h-5 text-green-600" />
+                Action Confirmed
+              </DialogTitle>
+              <DialogDescription>
+                Review the action you just completed
+              </DialogDescription>
+            </DialogHeader>
+
+            {confirmedAction && (
+              <div className="space-y-4">
+                {/* Action Display */}
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Action Taken</p>
+                  <div className="flex items-center gap-2">
+                    <Badge className={`text-sm px-3 py-1 ${
+                      confirmedAction.action === 'approve' ? 'bg-green-100 text-green-700' :
+                      confirmedAction.action === 'decline' ? 'bg-red-100 text-red-700' :
+                      confirmedAction.action === 'later' ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-gray-100 text-gray-700'
+                    }`}>
+                      {confirmedAction.action.charAt(0).toUpperCase() + confirmedAction.action.slice(1)}
+                    </Badge>
+                    {confirmedAction.days && (
+                      <span className="text-sm text-muted-foreground">in {confirmedAction.days} days</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Notes Display */}
+                {confirmedAction.notes && (
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Notes</p>
+                    <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                      <p className="text-sm text-foreground whitespace-pre-wrap">{confirmedAction.notes}</p>
+                    </div>
+                  </div>
+                )}
+
+                {!confirmedAction.notes && (
+                  <div>
+                    <p className="text-xs text-muted-foreground italic">No additional notes provided</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <DialogFooter className="mt-6">
+              <Button
+                variant="outline"
+                onClick={() => setConfirmDialogOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleConfirmAction}
+                className="bg-primary hover:bg-primary/90"
+              >
+                Continue
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </main>
   )
