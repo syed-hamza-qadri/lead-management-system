@@ -47,7 +47,7 @@ export default function LeadDetail() {
   const [lead, setLead] = useState<Lead | null>(null)
   const [loading, setLoading] = useState(true)
   const [responding, setResponding] = useState(false)
-  const [action, setAction] = useState<'approve' | 'decline' | 'later' | null>(null)
+  const [action, setAction] = useState<'approve' | 'decline' | 'later' | 'scheduled' | null>(null)
   const [response, setResponse] = useState('')
   const [daysToLater, setDaysToLater] = useState('7')
   const [previousResponse, setPreviousResponse] = useState<PreviousResponse | null>(null)
@@ -101,7 +101,7 @@ export default function LeadDetail() {
         
         if (allResponses && allResponses.length > 0) {
           // Get unique employee IDs
-          const employeeIds = Array.from(new Set(allResponses.map(r => r.employee_id)))
+          const employeeIds = Array.from(new Set(allResponses.map((r: any) => r.employee_id)))
           
           // Fetch employee names
           const { data: employees } = await supabase
@@ -109,10 +109,10 @@ export default function LeadDetail() {
             .select('id, name')
             .in('id', employeeIds)
           
-          const employeeMap = new Map(employees?.map(e => [e.id, e.name]) || [])
+          const employeeMap = new Map(employees?.map((e: any) => [e.id, e.name]) || [])
           
           // Enrich responses with employee names
-          const enrichedHistory = allResponses.map(response => ({
+          const enrichedHistory = allResponses.map((response: any) => ({
             ...response,
             employee_name: employeeMap.get(response.employee_id) || 'Unknown'
           })) as ResponseHistory[]
