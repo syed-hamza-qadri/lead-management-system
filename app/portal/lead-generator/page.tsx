@@ -551,7 +551,7 @@ export default function LeadGenerator() {
                     <span>Lead Details</span>
                     <span className="text-xs text-muted-foreground">(Double-click to expand)</span>
                   </Label>
-                  <div className="relative border rounded-md bg-background h-48 overflow-y-auto">
+                  <div className="relative border rounded-md bg-background h-32 overflow-y-auto">
                     <Textarea
                       id="details"
                       placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890"
@@ -561,7 +561,7 @@ export default function LeadGenerator() {
                         setEditDetailsText(leadDetails)
                         setEditDetailsModalOpen(true)
                       }}
-                      rows={5}
+                      rows={3}
                       className="resize-none h-full border-0"
                     />
                   </div>
@@ -1008,41 +1008,31 @@ export default function LeadGenerator() {
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Edit Lead Details</DialogTitle>
-              <DialogDescription>Edit the lead details with a larger input area</DialogDescription>
             </DialogHeader>
             
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="edit-details" className="mb-2 block">Lead Details</Label>
-                <Textarea
-                  id="edit-details"
-                  value={editDetailsText}
-                  onChange={(e) => setEditDetailsText(e.target.value)}
-                  placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890&#10;address=123 Main St"
-                  rows={12}
-                  className="w-full resize-none"
-                />
-                <p className="text-xs text-muted-foreground mt-2">
-                  Format: key=value pairs separated by commas or newlines
-                </p>
-              </div>
+            <Textarea
+              value={editDetailsText}
+              onChange={(e) => setEditDetailsText(e.target.value)}
+              placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890&#10;address=123 Main St"
+              rows={16}
+              className="w-full resize-none"
+            />
               
-              <div className="flex gap-2 justify-end">
-                <Button
-                  variant="outline"
-                  onClick={() => setEditDetailsModalOpen(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => {
-                    setLeadDetails(editDetailsText)
-                    setEditDetailsModalOpen(false)
-                  }}
-                >
-                  Save Changes
-                </Button>
-              </div>
+            <div className="flex gap-2 justify-end">
+              <Button
+                variant="outline"
+                onClick={() => setEditDetailsModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  setLeadDetails(editDetailsText)
+                  setEditDetailsModalOpen(false)
+                }}
+              >
+                Save Changes
+              </Button>
             </div>
           </DialogContent>
         </Dialog>
