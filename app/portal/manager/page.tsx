@@ -288,7 +288,7 @@ export default function ManagerPortal() {
       // Create maps for quick lookup instead of iterating
       const nicheMapByCallerId = new Map<string, Niche[]>()
       const cityMapByCallerId = new Map<string, City[]>()
-      const responseMapByLeadAndCaller = new Map<string, Map<string, string[]>>()
+      const responseMapByLeadAndCaller = new Map<string, Map<string, string>>()
 
       // Build lookup maps
       ;(allNicheAssignments || []).forEach((assignment: any) => {
@@ -306,14 +306,13 @@ export default function ManagerPortal() {
       })
 
       ;(allLeadResponses || []).forEach((response: any) => {
-        const key = `${response.lead_id}-${response.employee_id}`
         if (!responseMapByLeadAndCaller.has(response.lead_id)) {
           responseMapByLeadAndCaller.set(response.lead_id, new Map())
         }
+        // Only store the LATEST action per lead per employee (skip duplicates)
         if (!responseMapByLeadAndCaller.get(response.lead_id)!.has(response.employee_id)) {
-          responseMapByLeadAndCaller.get(response.lead_id)!.set(response.employee_id, [])
+          responseMapByLeadAndCaller.get(response.lead_id)!.set(response.employee_id, response.action)
         }
-        responseMapByLeadAndCaller.get(response.lead_id)!.get(response.employee_id)!.push(response.action)
       })
 
       // Calculate performance metrics using maps (no additional queries)
@@ -328,12 +327,12 @@ export default function ManagerPortal() {
         let approved = 0, declined = 0, scheduled = 0
 
         leadsInCities.forEach((lead: any) => {
-          const callerResponses = responseMapByLeadAndCaller.get(lead.id)?.get(caller.id) || []
-          if (callerResponses.length > 0) {
+          const callerResponses = responseMapByLeadAndCaller.get(lead.id)?.get(caller.id)
+          if (callerResponses) {
             leadsWithAction.add(lead.id)
-            if (callerResponses.includes('approve')) approved++
-            if (callerResponses.includes('decline')) declined++
-            if (callerResponses.includes('later')) scheduled++
+            if (callerResponses === 'approved') approved++
+            else if (callerResponses === 'declined') declined++
+            else if (callerResponses === 'scheduled') scheduled++
           }
         })
 
@@ -372,24 +371,28 @@ export default function ManagerPortal() {
       allGenerators.forEach((generatorId: string) => {
         const generatorLeads = (leadsData || []).filter((l: any) => l.created_by === generatorId)
         let approved = 0, declined = 0, scheduled = 0
+        const leadsWithAction = new Set<string>()
         
         generatorLeads.forEach((lead: any) => {
           const leadResponses = responseMapByLeadAndCaller.get(lead.id)
           if (leadResponses) {
-            // For each lead, check if ANY response has approve, decline, or later
-            let hasApprove = false, hasDecline = false, hasLater = false
-            leadResponses.forEach((responses: any) => {
-              if (responses.includes('approve')) hasApprove = true
-              if (responses.includes('decline')) hasDecline = true
-              if (responses.includes('later')) hasLater = true
+            // Get latest action across ALL employees for this lead
+            let hasApproved = false, hasDeclined = false, hasScheduled = false
+            leadResponses.forEach((response: any) => {
+              if (response === 'approved') hasApproved = true
+              else if (response === 'declined') hasDeclined = true
+              else if (response === 'scheduled') hasScheduled = true
             })
-            if (hasApprove) approved++
-            if (hasDecline) declined++
-            if (hasLater) scheduled++
+            if (hasApproved || hasDeclined || hasScheduled) {
+              leadsWithAction.add(lead.id)
+              if (hasApproved) approved++
+              if (hasDeclined) declined++
+              if (hasScheduled) scheduled++
+            }
           }
         })
 
-        const pending = generatorLeads.length - (approved + declined + scheduled)
+        const pending = generatorLeads.length - leadsWithAction.size
         const total = approved + declined + scheduled
         const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
 
@@ -740,23 +743,29 @@ export default function ManagerPortal() {
 
         const leadsInCitiesIds = leadsInAssignedCities.map(l => l.id)
 
-        // Fetch responses only for leads in assigned cities
+        // Fetch responses only for leads in assigned cities - ordered by creation (latest first)
         const { data: responses } = await supabase
           .from('lead_responses')
           .select('lead_id, action')
-          .in('lead_id', leadsInCitiesIds.length > 0 ? leadsInCitiesIds : ['']) as any
+          .in('lead_id', leadsInCitiesIds.length > 0 ? leadsInCitiesIds : [''])
+          .order('created_at', { ascending: false }) as any
 
-        // Count actions per lead
+        // Count actions per lead - only count the latest response per lead
         const leadsWithActions = new Set<string>()
+        const leadLatestAction = new Map<string, string>()
         let approved = 0
         let declined = 0
         let scheduled = 0
 
         ;(responses || []).forEach((response: any) => {
-          leadsWithActions.add(response.lead_id)
-          if (response.action === 'approve') approved++
-          else if (response.action === 'decline') declined++
-          else if (response.action === 'later') scheduled++
+          // Only process if we haven't seen this lead yet (first occurrence is latest due to DESC order)
+          if (!leadLatestAction.has(response.lead_id)) {
+            leadLatestAction.set(response.lead_id, response.action)
+            leadsWithActions.add(response.lead_id)
+            if (response.action === 'approved') approved++
+            else if (response.action === 'declined') declined++
+            else if (response.action === 'scheduled') scheduled++
+          }
         })
 
         // Pending leads = total leads in assigned cities - leads with any action
@@ -787,16 +796,16 @@ export default function ManagerPortal() {
           .order('created_at', { ascending: false })
           .limit(1000) as any
 
-        // Create response map for lead generators
-        const responseMapByLeadAndCallerId = new Map<string, Map<string, string[]>>()
+        // Create response map for lead generators - store only latest action per lead per employee
+        const responseMapByLeadAndCallerId = new Map<string, Map<string, string>>()
         ;(freshResponses || []).forEach((response: any) => {
           if (!responseMapByLeadAndCallerId.has(response.lead_id)) {
             responseMapByLeadAndCallerId.set(response.lead_id, new Map())
           }
+          // Only store the LATEST action per lead per employee (skip if already exists)
           if (!responseMapByLeadAndCallerId.get(response.lead_id)!.has(response.employee_id)) {
-            responseMapByLeadAndCallerId.get(response.lead_id)!.set(response.employee_id, [])
+            responseMapByLeadAndCallerId.get(response.lead_id)!.set(response.employee_id, response.action)
           }
-          responseMapByLeadAndCallerId.get(response.lead_id)!.get(response.employee_id)!.push(response.action)
         })
 
         // Calculate lead generator performance
@@ -812,23 +821,28 @@ export default function ManagerPortal() {
         allGeneratorsSet.forEach((generatorId: string) => {
           const generatorLeads = (freshLeads || []).filter((l: any) => l.created_by === generatorId)
           let approved = 0, declined = 0, scheduled = 0
+          const leadsWithAction = new Set<string>()
           
           generatorLeads.forEach((lead: any) => {
             const leadResponses = responseMapByLeadAndCallerId.get(lead.id)
             if (leadResponses) {
-              let hasApprove = false, hasDecline = false, hasLater = false
-              leadResponses.forEach((responses: any) => {
-                if (responses.includes('approve')) hasApprove = true
-                if (responses.includes('decline')) hasDecline = true
-                if (responses.includes('later')) hasLater = true
+              // Check if ANY employee has actioned this lead
+              let hasApproved = false, hasDeclined = false, hasScheduled = false
+              leadResponses.forEach((action: string) => {
+                if (action === 'approved') hasApproved = true
+                else if (action === 'declined') hasDeclined = true
+                else if (action === 'scheduled') hasScheduled = true
               })
-              if (hasApprove) approved++
-              if (hasDecline) declined++
-              if (hasLater) scheduled++
+              if (hasApproved || hasDeclined || hasScheduled) {
+                leadsWithAction.add(lead.id)
+                if (hasApproved) approved++
+                if (hasDeclined) declined++
+                if (hasScheduled) scheduled++
+              }
             }
           })
 
-          const pending = generatorLeads.length - (approved + declined + scheduled)
+          const pending = generatorLeads.length - leadsWithAction.size
           const total = approved + declined + scheduled
           const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
 

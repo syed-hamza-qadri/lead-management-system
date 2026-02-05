@@ -152,6 +152,7 @@ export default function LeadGenerator() {
       // Calculate performance metrics for this lead generator
       let approved = 0, declined = 0, scheduled = 0
       const leadsWithAction = new Set<string>()
+      const leadLatestAction = new Map<string, string>()
       
       // Get all responses for this generator's leads
       const leadIds = (leadsData || []).map((l: any) => l.id)
@@ -160,12 +161,17 @@ export default function LeadGenerator() {
           .from('lead_responses')
           .select('lead_id, action')
           .in('lead_id', leadIds)
+          .order('created_at', { ascending: false })
         
         ;(responses || []).forEach((r: any) => {
-          leadsWithAction.add(r.lead_id)
-          if (r.action === 'approve') approved++
-          else if (r.action === 'decline') declined++
-          else if (r.action === 'later') scheduled++
+          // Only count the first occurrence (latest due to DESC order)
+          if (!leadLatestAction.has(r.lead_id)) {
+            leadLatestAction.set(r.lead_id, r.action)
+            leadsWithAction.add(r.lead_id)
+            if (r.action === 'approved') approved++
+            else if (r.action === 'declined') declined++
+            else if (r.action === 'scheduled') scheduled++
+          }
         })
       }
       
@@ -210,6 +216,7 @@ export default function LeadGenerator() {
       // Calculate performance metrics for this lead generator
       let approved = 0, declined = 0, scheduled = 0
       const leadsWithAction = new Set<string>()
+      const leadLatestAction = new Map<string, string>()
       
       // Get all responses for this generator's leads
       const leadIds = (leadsData || []).map((l: any) => l.id)
@@ -218,12 +225,17 @@ export default function LeadGenerator() {
           .from('lead_responses')
           .select('lead_id, action')
           .in('lead_id', leadIds)
+          .order('created_at', { ascending: false })
         
         ;(responses || []).forEach((r: any) => {
-          leadsWithAction.add(r.lead_id)
-          if (r.action === 'approve') approved++
-          else if (r.action === 'decline') declined++
-          else if (r.action === 'later') scheduled++
+          // Only count the first occurrence (latest due to DESC order)
+          if (!leadLatestAction.has(r.lead_id)) {
+            leadLatestAction.set(r.lead_id, r.action)
+            leadsWithAction.add(r.lead_id)
+            if (r.action === 'approved') approved++
+            else if (r.action === 'declined') declined++
+            else if (r.action === 'scheduled') scheduled++
+          }
         })
       }
       

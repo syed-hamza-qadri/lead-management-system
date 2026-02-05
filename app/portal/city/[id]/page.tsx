@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Loader2, ArrowLeft, ChevronRight, Calendar, BarChart3 } from 'lucide-react'
+import { Loader2, ArrowLeft, ChevronRight, Calendar, BarChart3, RefreshCw } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 interface Lead {
@@ -22,6 +22,8 @@ interface Lead {
 interface LeadWithSchedule extends Lead {
   daysRemaining?: number
   was_later?: boolean  // Track if lead was previously scheduled
+  lastActionedAt?: string  // Track when the last action was taken
+  lastAction?: string  // Track what the last action was
 }
 
 export default function LeadList() {
@@ -34,6 +36,7 @@ export default function LeadList() {
   const [cityName, setCityName] = useState('')
   const [nicheName, setNicheName] = useState('')
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [defaultTab, setDefaultTab] = useState('unassigned')
   const [performanceOpen, setPerformanceOpen] = useState(false)
   const [performance, setPerformance] = useState({ approved: 0, declined: 0, scheduled: 0, pending: 0 })
@@ -47,118 +50,176 @@ export default function LeadList() {
     }
   }, [searchParams])
 
-  useEffect(() => {
-    const fetchLeads = async () => {
-      try {
-        // Get city name and niche
-        const { data: cityData, error: cityError } = await supabase
-          .from('cities')
-          .select('name, niche_id, niches(name)')
-          .eq('id', cityId)
-          .single()
-
-        if (cityError) throw cityError
-        setCityName(cityData?.name || '')
-        setNicheName(cityData?.niches?.name || '')
-
-      // Get leads for this city
-      const { data, error } = await supabase
-        .from('leads')
-        .select('id, data, status, created_at, follow_up_date')
-        .eq('city_id', cityId)
-        .order('created_at', { ascending: false })
-        .limit(100) // Add pagination
-
-      if (error) throw error
-
-      // Fetch all scheduled_for data in one query instead of per-lead
-      const leadIds = (data || []).map((l: any) => l.id)
-      const { data: responseData } = await supabase
-        .from('lead_responses')
-        .select('lead_id, scheduled_for, action')
-        .in('lead_id', leadIds.length > 0 ? leadIds : [''])
-        .order('created_at', { ascending: false })
-
-      // Create lookup map for quick access
-      const scheduledMap = new Map<string, string>()
-      ;(responseData || []).forEach((response: any) => {
-        if (!scheduledMap.has(response.lead_id)) {
-          scheduledMap.set(response.lead_id, response.scheduled_for)
-        }
-      })
-
-      // Calculate performance metrics from responses
-      let approved = 0, declined = 0, scheduled = 0
-      const leadsWithAction = new Set<string>()
-      ;(responseData || []).forEach((response: any) => {
-        leadsWithAction.add(response.lead_id)
-        if (response.action === 'approve' || response.action === 'approved') approved++
-        else if (response.action === 'decline' || response.action === 'declined') declined++
-        else if (response.action === 'later' || response.action === 'scheduled') scheduled++
-      })
-      
-      const pending = (data || []).length - leadsWithAction.size
-      setPerformance({ approved, declined, scheduled, pending })
-
-      // Enrich leads using map (no additional queries)
-      const enrichedLeads = (data || []).map((lead: any) => {
-        let daysRemaining = 0
-        let wasLater = false
-
-        if (lead.status === 'scheduled' && lead.follow_up_date) {
-          const scheduledDate = new Date(lead.follow_up_date)
-          const today = new Date()
-          today.setHours(0, 0, 0, 0)
-          scheduledDate.setHours(0, 0, 0, 0)
-          daysRemaining = Math.ceil((scheduledDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-          
-          // If scheduled date has passed, update status
-          if (daysRemaining <= 0) {
-            supabase
-              .from('leads')
-              .update({ status: 'unassigned' })
-              .eq('id', lead.id)
-              .then()
-            wasLater = true  // Mark that this was previously scheduled
-            return { ...lead, status: 'unassigned', daysRemaining: 0, was_later: true }
-          }
-        }
-
-        return { ...lead, daysRemaining, was_later: wasLater }
-      })
-
-      // Sort: was_later leads first (top), then scheduled by days remaining, then by creation date
-      const sorted = enrichedLeads.sort((a: any, b: any) => {
-        // Leads that were previously scheduled come first
-        if (a.was_later && !b.was_later) return -1
-        if (!a.was_later && b.was_later) return 1
-        
-        // Then scheduled leads by days remaining
-        if (a.status === 'scheduled' && b.status !== 'scheduled') return -1
-        if (a.status !== 'scheduled' && b.status === 'scheduled') return 1
-        if (a.status === 'scheduled' && b.status === 'scheduled') {
-          return (a.daysRemaining || 999) - (b.daysRemaining || 999)
-        }
-        
-        // Then by creation date (newest first)
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      })
-
-      setLeads(sorted)
-      } catch (error) {
-        console.error('[v0] Error fetching leads:', error)
-        toast({
-          title: 'Error',
-          description: 'Failed to load leads',
-          variant: 'destructive',
-        })
-      } finally {
-        setLoading(false)
-      }
+  const fetchLeads = async (isRefresh: boolean = false) => {
+    if (isRefresh) {
+      setRefreshing(true)
+    } else {
+      setLoading(true)
     }
+    
+    try {
+      // Get city name and niche
+      const { data: cityData, error: cityError } = await supabase
+        .from('cities')
+        .select('name, niche_id, niches(name)')
+        .eq('id', cityId)
+        .single()
 
+      if (cityError) throw cityError
+      setCityName(cityData?.name || '')
+      setNicheName(cityData?.niches?.name || '')
+
+    // Get leads for this city
+    const { data, error } = await supabase
+      .from('leads')
+      .select('id, data, status, created_at, follow_up_date')
+      .eq('city_id', cityId)
+      .order('created_at', { ascending: false })
+      .limit(100) // Add pagination
+
+    if (error) throw error
+
+    // Fetch all response data in one query instead of per-lead
+    const leadIds = (data || []).map((l: any) => l.id)
+    const { data: responseData } = await supabase
+      .from('lead_responses')
+      .select('lead_id, scheduled_for, action, actioned_at, created_at')
+      .in('lead_id', leadIds.length > 0 ? leadIds : [''])
+      .order('actioned_at', { ascending: false })
+
+    // Create lookup maps for quick access
+    const scheduledMap = new Map<string, string>()
+    const actionMap = new Map<string, { action: string; actioned_at: string }>()
+    ;(responseData || []).forEach((response: any) => {
+      if (!scheduledMap.has(response.lead_id)) {
+        scheduledMap.set(response.lead_id, response.scheduled_for)
+      }
+      if (!actionMap.has(response.lead_id)) {
+        actionMap.set(response.lead_id, {
+          action: response.action,
+          actioned_at: response.actioned_at || response.created_at
+        })
+      }
+    })
+
+    // Calculate performance metrics from responses - only count latest per lead
+    let approved = 0, declined = 0, scheduled = 0
+    const leadsWithAction = new Set<string>()
+    const leadLatestAction = new Map<string, string>()
+    ;(responseData || []).forEach((response: any) => {
+      // Only count the first occurrence (latest due to DESC order)
+      if (!leadLatestAction.has(response.lead_id)) {
+        leadLatestAction.set(response.lead_id, response.action)
+        leadsWithAction.add(response.lead_id)
+        if (response.action === 'approved') approved++
+        else if (response.action === 'declined') declined++
+        else if (response.action === 'scheduled') scheduled++
+      }
+    })
+    
+    const pending = (data || []).length - leadsWithAction.size
+    setPerformance({ approved, declined, scheduled, pending })
+
+    // Enrich leads using maps (no additional queries)
+    const enrichedLeads = (data || []).map((lead: any) => {
+      let daysRemaining = 0
+      let wasLater = false
+      const actionInfo = actionMap.get(lead.id)
+
+      if (lead.status === 'scheduled' && lead.follow_up_date) {
+        const scheduledDate = new Date(lead.follow_up_date)
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        scheduledDate.setHours(0, 0, 0, 0)
+        daysRemaining = Math.ceil((scheduledDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+        
+        // If scheduled date has passed, update status
+        if (daysRemaining <= 0) {
+          supabase
+            .from('leads')
+            .update({ status: 'unassigned' })
+            .eq('id', lead.id)
+            .then()
+          wasLater = true  // Mark that this was previously scheduled
+          return { ...lead, status: 'unassigned', daysRemaining: 0, was_later: true, lastActionedAt: actionInfo?.actioned_at, lastAction: actionInfo?.action }
+        }
+      }
+
+      return { ...lead, daysRemaining, was_later: wasLater, lastActionedAt: actionInfo?.actioned_at, lastAction: actionInfo?.action }
+    })
+
+    // Sort assigned leads: scheduled first (by days), then approved (by action time), then declined (by action time)
+    const sorted = enrichedLeads.sort((a: any, b: any) => {
+      // Leads that were previously scheduled come first (top of unassigned)
+      if (a.was_later && !b.was_later) return -1
+      if (!a.was_later && b.was_later) return 1
+      
+      // For assigned tab: prioritize by status
+      // 1. Scheduled leads first (by days remaining - fewest days first)
+      if (a.status === 'scheduled' && b.status !== 'scheduled') return -1
+      if (a.status !== 'scheduled' && b.status === 'scheduled') return 1
+      if (a.status === 'scheduled' && b.status === 'scheduled') {
+        return (a.daysRemaining || 999) - (b.daysRemaining || 999)
+      }
+      
+      // 2. Approved leads (by actioned_at - most recent first)
+      const aIsApproved = a.lastAction === 'approve' || a.lastAction === 'approved'
+      const bIsApproved = b.lastAction === 'approve' || b.lastAction === 'approved'
+      if (aIsApproved && !bIsApproved) return -1
+      if (!aIsApproved && bIsApproved) return 1
+      if (aIsApproved && bIsApproved) {
+        const aTime = a.lastActionedAt ? new Date(a.lastActionedAt).getTime() : 0
+        const bTime = b.lastActionedAt ? new Date(b.lastActionedAt).getTime() : 0
+        return bTime - aTime  // Most recent first
+      }
+      
+      // 3. Declined leads (by actioned_at - most recent first)
+      const aIsDeclined = a.lastAction === 'decline' || a.lastAction === 'declined'
+      const bIsDeclined = b.lastAction === 'decline' || b.lastAction === 'declined'
+      if (aIsDeclined && !bIsDeclined) return -1
+      if (!aIsDeclined && bIsDeclined) return 1
+      if (aIsDeclined && bIsDeclined) {
+        const aTime = a.lastActionedAt ? new Date(a.lastActionedAt).getTime() : 0
+        const bTime = b.lastActionedAt ? new Date(b.lastActionedAt).getTime() : 0
+        return bTime - aTime  // Most recent first
+      }
+      
+      // Fallback: by creation date (newest first)
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    })
+
+    setLeads(sorted)
+
+    if (isRefresh) {
+      toast({
+        title: 'Refreshed',
+        description: 'Leads updated successfully',
+      })
+    }
+    } catch (error) {
+      console.error('[v0] Error fetching leads:', error)
+      toast({
+        title: 'Error',
+        description: 'Failed to load leads',
+        variant: 'destructive',
+      })
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => {
     if (cityId) {
-      fetchLeads()
+      fetchLeads(false)
+      
+      // Auto-refresh every 10 seconds to pick up changes from other users
+      const interval = setInterval(() => {
+        fetchLeads(false)
+      }, 10000)
+      
+      // Cleanup interval on unmount
+      return () => clearInterval(interval)
     }
   }, [cityId, supabase])
 
@@ -294,6 +355,15 @@ export default function LeadList() {
             </div>
           </div>
           <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              onClick={() => fetchLeads(true)} 
+              disabled={refreshing}
+              className="flex items-center gap-2"
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Updating...' : 'Refresh'}
+            </Button>
             <Button variant="outline" onClick={() => setPerformanceOpen(true)} className="flex items-center gap-2">
               <BarChart3 className="w-4 h-4" />
               Status
@@ -311,7 +381,7 @@ export default function LeadList() {
             
             <Card className="bg-gradient-to-br from-card to-muted/20">
               <CardHeader className="pb-1">
-                <CardTitle className="text-base">{cityName}</CardTitle>
+                <CardTitle className="text-base">{nicheName} in {cityName}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm pt-0">
                 <div className="flex justify-between items-center">
@@ -333,6 +403,12 @@ export default function LeadList() {
                 <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Pending:</span>
                   <Badge className="bg-yellow-100 text-yellow-700">{performance.pending || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t border-border">
+                  <span className="font-semibold">Conversion Rate:</span>
+                  <Badge className="bg-gray-100 text-gray-900">
+                    {leads.length > 0 ? Math.round(((performance.approved || 0) / leads.length) * 100) : 0}%
+                  </Badge>
                 </div>
               </CardContent>
             </Card>

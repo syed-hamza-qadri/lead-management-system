@@ -137,7 +137,7 @@ export default function LeadDetail() {
         
         // Fetch previous response for current user to pre-fill notes only
         if (userId) {
-          const { data: prevResponseData } = await supabase
+          const { data: prevResponseData, error: prevError } = await supabase
             .from('lead_responses')
             .select('id, action, response_text, scheduled_for, created_at, employee_id')
             .eq('lead_id', leadId)
@@ -146,7 +146,8 @@ export default function LeadDetail() {
             .limit(1)
             .single()
 
-          if (prevResponseData) {
+          // .single() will error if no row found, which is expected for new leads
+          if (prevResponseData && !prevError) {
             setPreviousResponse(prevResponseData as PreviousResponse)
             // Only pre-fill notes, not the action
             setResponse(prevResponseData.response_text || '')
