@@ -135,23 +135,14 @@ export default function LeadDetail() {
         }
         // For 'unassigned' status or 'Later - Unassigned', don't select any action
         
-        // Fetch previous response for current user to pre-fill notes only
-        if (userId) {
-          const { data: prevResponseData, error: prevError } = await supabase
-            .from('lead_responses')
-            .select('id, action, response_text, scheduled_for, created_at, employee_id')
-            .eq('lead_id', leadId)
-            .eq('employee_id', userId)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .single()
-
-          // .single() will error if no row found, which is expected for new leads
-          if (prevResponseData && !prevError) {
-            setPreviousResponse(prevResponseData as PreviousResponse)
-            // Only pre-fill notes, not the action
-            setResponse(prevResponseData.response_text || '')
-          }
+        // Fetch latest response (from ANY user) to pre-fill notes
+        // NOTE: responseHistory is already fetched above with all responses ordered by actioned_at DESC
+        if (allResponses && allResponses.length > 0) {
+          // The first response is the latest since ordered by actioned_at DESC
+          const latestResponse = allResponses[0]
+          setPreviousResponse(latestResponse as PreviousResponse)
+          // Pre-fill notes with the latest response from anyone (caller or manager)
+          setResponse(latestResponse.response_text || '')
         }
 
         setLead(data)

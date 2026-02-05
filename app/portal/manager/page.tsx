@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Loader2, LogOut, RefreshCw, Plus, Edit2 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
@@ -151,6 +152,7 @@ export default function ManagerPortal() {
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const [scheduleDays, setScheduleDays] = useState<string>('')
+  const [statusMessage, setStatusMessage] = useState<string>('')
   const [editingLeadDetails, setEditingLeadDetails] = useState<{ index: number; name: string; callerName: string } | null>(null)
   
   // Lead status summary metrics
@@ -304,7 +306,7 @@ export default function ManagerPortal() {
       // Fetch all lead responses once (not per-caller) - limited to recent 1000
       const { data: allLeadResponses } = await supabase
         .from('lead_responses')
-        .select('lead_id, action, employee_id')
+        .select('lead_id, action, employee_id, response_text, scheduled_for, created_at, actioned_at')
         .order('created_at', { ascending: false })
         .limit(1000) as any
 
@@ -376,6 +378,15 @@ export default function ManagerPortal() {
 
       // Batch set performance data
       setCallerPerformance(Object.fromEntries(performanceData))
+
+      // Create a map of lead_id to latest response (full response object)
+      const responseMap: { [leadId: string]: any } = {}
+      ;(allLeadResponses || []).forEach((response: any) => {
+        if (!responseMap[response.lead_id]) {
+          responseMap[response.lead_id] = response
+        }
+      })
+      setLeadResponses(responseMap)
 
       // Calculate lead generator performance
       const generatorPerformanceData = new Map<string, LeadGeneratorPerformance>()
@@ -582,7 +593,7 @@ export default function ManagerPortal() {
       const responseData = {
         action: mappedStatus,
         scheduled_for: scheduledForDate,
-        response_text: ''
+        response_text: statusMessage
       }
 
       // Update or insert lead_response
@@ -621,7 +632,7 @@ export default function ManagerPortal() {
         [leadId]: {
           id: leadId,
           action: mappedStatus,
-          response_text: '',
+          response_text: statusMessage,
           scheduled_for: scheduledForDate,
           actioned_at: new Date().toISOString()
         }
@@ -640,12 +651,17 @@ export default function ManagerPortal() {
       setEditingStatusLeadId(null)
       setStatusUpdate('')
       setScheduleDays('')
+      setStatusMessage('')
       setEditingLeadDetails(null)
+      setStatusDialogOpen(false)
       
       toast({
         title: 'Success',
         description: 'Lead status updated successfully',
       })
+
+      // Refresh dashboard metrics in background (don't await to close dialog immediately)
+      refreshDashboard()
 
       return true
     } catch (error) {
@@ -795,9 +811,18 @@ export default function ManagerPortal() {
 
         const { data: freshResponses } = await supabase
           .from('lead_responses')
-          .select('lead_id, action, employee_id')
+          .select('lead_id, action, employee_id, response_text, scheduled_for, created_at, actioned_at')
           .order('created_at', { ascending: false })
           .limit(1000) as any
+
+        // Update leadResponses with latest response for each lead (for dialog pre-fill)
+        const freshResponseMap: { [leadId: string]: any } = {}
+        ;(freshResponses || []).forEach((response: any) => {
+          if (!freshResponseMap[response.lead_id]) {
+            freshResponseMap[response.lead_id] = response
+          }
+        })
+        setLeadResponses(freshResponseMap)
 
         // Create response map for lead generators - store only latest action per lead per employee
         const responseMapByLeadAndCallerId = new Map<string, Map<string, string>>()
@@ -1950,7 +1975,7 @@ export default function ManagerPortal() {
                         <SelectItem value="unactioned">Unactioned</SelectItem>
                         <SelectItem value="approved">Approved</SelectItem>
                         <SelectItem value="declined">Declined</SelectItem>
-                        <SelectItem value="schedule">Scheduled</SelectItem>
+                        <SelectItem value="scheduled">Scheduled</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -2142,6 +2167,9 @@ export default function ManagerPortal() {
                                     setEditingStatusLeadId(lead.id)
                                     setStatusUpdate(lead.status === 'scheduled' ? 'schedule' : (lead.status || ''))
                                     setScheduleDays(daysValue)
+                                    // Pre-fill message with existing response_text if available
+                                    const existingResponse = leadResponses[lead.id]
+                                    setStatusMessage(existingResponse?.response_text || '')
                                     setEditingLeadDetails({
                                       index: index + 1,
                                       name: lead.data?.name || 'Lead',
@@ -2224,6 +2252,20 @@ export default function ManagerPortal() {
                   </div>
                 )}
 
+                <div>
+                  <Label htmlFor="status-message" className="mb-2 block">Message</Label>
+                  <Textarea
+                    id="status-message"
+                    placeholder="Add notes or message (optional)"
+                    value={statusMessage}
+                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setStatusMessage(e.target.value)}
+                    className="w-full min-h-20"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Optional: Add notes or feedback about this action
+                  </p>
+                </div>
+
                 <div className="flex gap-2 justify-end">
                   <Button
                     variant="outline"
@@ -2232,6 +2274,7 @@ export default function ManagerPortal() {
                       setEditingStatusLeadId(null)
                       setStatusUpdate('')
                       setScheduleDays('')
+                      setStatusMessage('')
                       setEditingLeadDetails(null)
                     }}
                   >
