@@ -375,19 +375,20 @@ export default function ManagerPortal() {
         
         generatorLeads.forEach((lead: any) => {
           const leadResponses = responseMapByLeadAndCaller.get(lead.id)
-          if (leadResponses) {
-            // Get latest action across ALL employees for this lead
-            let hasApproved = false, hasDeclined = false, hasScheduled = false
-            leadResponses.forEach((response: any) => {
-              if (response === 'approved') hasApproved = true
-              else if (response === 'declined') hasDeclined = true
-              else if (response === 'scheduled') hasScheduled = true
-            })
-            if (hasApproved || hasDeclined || hasScheduled) {
+          if (leadResponses && leadResponses.size > 0) {
+            // Get the LATEST action across ALL employees for this lead
+            // Since responses are ordered by created_at DESC, the first one we encounter is the latest
+            let latestAction: string | null = null
+            for (const action of leadResponses.values()) {
+              latestAction = action
+              break // Take only the first (latest) action
+            }
+            
+            if (latestAction) {
               leadsWithAction.add(lead.id)
-              if (hasApproved) approved++
-              if (hasDeclined) declined++
-              if (hasScheduled) scheduled++
+              if (latestAction === 'approved') approved++
+              else if (latestAction === 'declined') declined++
+              else if (latestAction === 'scheduled') scheduled++
             }
           }
         })
@@ -825,19 +826,20 @@ export default function ManagerPortal() {
           
           generatorLeads.forEach((lead: any) => {
             const leadResponses = responseMapByLeadAndCallerId.get(lead.id)
-            if (leadResponses) {
-              // Check if ANY employee has actioned this lead
-              let hasApproved = false, hasDeclined = false, hasScheduled = false
-              leadResponses.forEach((action: string) => {
-                if (action === 'approved') hasApproved = true
-                else if (action === 'declined') hasDeclined = true
-                else if (action === 'scheduled') hasScheduled = true
-              })
-              if (hasApproved || hasDeclined || hasScheduled) {
+            if (leadResponses && leadResponses.size > 0) {
+              // Get the LATEST action across ALL employees for this lead
+              // Since responses are ordered by created_at DESC, the first one we encounter is the latest
+              let latestAction: string | null = null
+              for (const action of leadResponses.values()) {
+                latestAction = action
+                break // Take only the first (latest) action
+              }
+              
+              if (latestAction) {
                 leadsWithAction.add(lead.id)
-                if (hasApproved) approved++
-                if (hasDeclined) declined++
-                if (hasScheduled) scheduled++
+                if (latestAction === 'approved') approved++
+                else if (latestAction === 'declined') declined++
+                else if (latestAction === 'scheduled') scheduled++
               }
             }
           })
