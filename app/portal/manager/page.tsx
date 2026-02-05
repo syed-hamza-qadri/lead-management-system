@@ -152,6 +152,14 @@ export default function ManagerPortal() {
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const [scheduleDays, setScheduleDays] = useState<string>('')
   const [editingLeadDetails, setEditingLeadDetails] = useState<{ index: number; name: string; callerName: string } | null>(null)
+  
+  // Lead status summary metrics
+  const [leadStatusMetrics, setLeadStatusMetrics] = useState({
+    pending: 0,
+    approved: 0,
+    scheduled: 0,
+    declined: 0
+  })
 
   useEffect(() => {
     if (!sessionLoading && !session) {
@@ -265,6 +273,21 @@ export default function ManagerPortal() {
       setCities((citiesData || []) as City[])
       setLeads((leadsData || []) as Lead[])
 
+      // Calculate lead status metrics
+      const metrics = {
+        pending: 0,
+        approved: 0,
+        scheduled: 0,
+        declined: 0
+      }
+      ;(leadsData || []).forEach((lead: any) => {
+        if (lead.status === 'unassigned') metrics.pending++
+        else if (lead.status === 'approved') metrics.approved++
+        else if (lead.status === 'scheduled') metrics.scheduled++
+        else if (lead.status === 'declined') metrics.declined++
+      })
+      setLeadStatusMetrics(metrics)
+
       // Fetch all assignments in batch (not per-caller)
       const { data: allNicheAssignments } = await supabase
         .from('niche_assignments')
@@ -323,17 +346,13 @@ export default function ManagerPortal() {
         const assignedCityIds = callerCities.map(c => c.id)
         
         const leadsInCities = (leadsData || []).filter((l: any) => assignedCityIds.includes(l.city_id))
-        const leadsWithAction = new Set<string>()
-        let approved = 0, declined = 0, scheduled = 0
+        let approved = 0, declined = 0, scheduled = 0, pending = 0
 
         leadsInCities.forEach((lead: any) => {
-          const callerResponses = responseMapByLeadAndCaller.get(lead.id)?.get(caller.id)
-          if (callerResponses) {
-            leadsWithAction.add(lead.id)
-            if (callerResponses === 'approved') approved++
-            else if (callerResponses === 'declined') declined++
-            else if (callerResponses === 'scheduled') scheduled++
-          }
+          if (lead.status === 'approved') approved++
+          else if (lead.status === 'declined') declined++
+          else if (lead.status === 'scheduled') scheduled++
+          else if (lead.status === 'unassigned') pending++
         })
 
         performanceData.set(caller.id, {
@@ -341,7 +360,7 @@ export default function ManagerPortal() {
           approved,
           declined,
           scheduled,
-          pending: leadsInCities.length - leadsWithAction.size
+          pending
         })
 
         setCallerNiches(prev => ({
@@ -370,30 +389,15 @@ export default function ManagerPortal() {
 
       allGenerators.forEach((generatorId: string) => {
         const generatorLeads = (leadsData || []).filter((l: any) => l.created_by === generatorId)
-        let approved = 0, declined = 0, scheduled = 0
-        const leadsWithAction = new Set<string>()
+        let approved = 0, declined = 0, scheduled = 0, pending = 0
         
         generatorLeads.forEach((lead: any) => {
-          const leadResponses = responseMapByLeadAndCaller.get(lead.id)
-          if (leadResponses && leadResponses.size > 0) {
-            // Get the LATEST action across ALL employees for this lead
-            // Since responses are ordered by created_at DESC, the first one we encounter is the latest
-            let latestAction: string | null = null
-            for (const action of leadResponses.values()) {
-              latestAction = action
-              break // Take only the first (latest) action
-            }
-            
-            if (latestAction) {
-              leadsWithAction.add(lead.id)
-              if (latestAction === 'approved') approved++
-              else if (latestAction === 'declined') declined++
-              else if (latestAction === 'scheduled') scheduled++
-            }
-          }
+          if (lead.status === 'approved') approved++
+          else if (lead.status === 'declined') declined++
+          else if (lead.status === 'scheduled') scheduled++
+          else if (lead.status === 'unassigned') pending++
         })
 
-        const pending = generatorLeads.length - leadsWithAction.size
         const total = approved + declined + scheduled
         const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
 
@@ -493,6 +497,21 @@ export default function ManagerPortal() {
       setCityAssignmentsData(allCityAssignments || [])
       setAllUsers(freshAllUsers)
       setLeadResponses(responseMap)
+
+      // Calculate lead status metrics
+      const metrics = {
+        pending: 0,
+        approved: 0,
+        scheduled: 0,
+        declined: 0
+      }
+      ;(leadsData || []).forEach((lead: any) => {
+        if (lead.status === 'unassigned') metrics.pending++
+        else if (lead.status === 'approved') metrics.approved++
+        else if (lead.status === 'scheduled') metrics.scheduled++
+        else if (lead.status === 'declined') metrics.declined++
+      })
+      setLeadStatusMetrics(metrics)
 
       toast({
         title: 'Success',
@@ -732,50 +751,33 @@ export default function ManagerPortal() {
 
         const assignedCityIds = (cityAssignments?.map((ca: any) => ca.city_id) || []).filter(Boolean)
 
-        // Fetch all leads in the cities assigned to this caller
+        // Fetch all leads in the cities assigned to this caller with their status
         let leadsInAssignedCities: any[] = []
         if (assignedCityIds.length > 0) {
           const { data: citiesLeads } = await supabase
             .from('leads')
-            .select('id')
+            .select('id, status')
             .in('city_id', assignedCityIds) as any
           leadsInAssignedCities = citiesLeads || []
         }
 
-        const leadsInCitiesIds = leadsInAssignedCities.map(l => l.id)
-
-        // Fetch responses only for leads in assigned cities - ordered by creation (latest first)
-        const { data: responses } = await supabase
-          .from('lead_responses')
-          .select('lead_id, action')
-          .in('lead_id', leadsInCitiesIds.length > 0 ? leadsInCitiesIds : [''])
-          .order('created_at', { ascending: false }) as any
-
-        // Count actions per lead - only count the latest response per lead
-        const leadsWithActions = new Set<string>()
-        const leadLatestAction = new Map<string, string>()
+        // Count leads by status
         let approved = 0
         let declined = 0
         let scheduled = 0
+        let pending = 0
 
-        ;(responses || []).forEach((response: any) => {
-          // Only process if we haven't seen this lead yet (first occurrence is latest due to DESC order)
-          if (!leadLatestAction.has(response.lead_id)) {
-            leadLatestAction.set(response.lead_id, response.action)
-            leadsWithActions.add(response.lead_id)
-            if (response.action === 'approved') approved++
-            else if (response.action === 'declined') declined++
-            else if (response.action === 'scheduled') scheduled++
-          }
+        ;(leadsInAssignedCities || []).forEach((lead: any) => {
+          if (lead.status === 'approved') approved++
+          else if (lead.status === 'declined') declined++
+          else if (lead.status === 'scheduled') scheduled++
+          else if (lead.status === 'unassigned') pending++
         })
-
-        // Pending leads = total leads in assigned cities - leads with any action
-        const pending = leadsInCitiesIds.length - leadsWithActions.size
 
         setCallerPerformance(prev => ({
           ...prev,
           [caller.id]: {
-            assigned: leadsInCitiesIds.length,
+            assigned: leadsInAssignedCities.length,
             approved,
             declined,
             scheduled,
@@ -788,7 +790,7 @@ export default function ManagerPortal() {
       try {
         const { data: freshLeads } = await supabase
           .from('leads')
-          .select('id, created_by')
+          .select('id, created_by, status')
           .order('created_at', { ascending: false }) as any
 
         const { data: freshResponses } = await supabase
@@ -809,6 +811,21 @@ export default function ManagerPortal() {
           }
         })
 
+        // Calculate lead status metrics for summary cards
+        const metrics = {
+          pending: 0,
+          approved: 0,
+          scheduled: 0,
+          declined: 0
+        }
+        ;(freshLeads || []).forEach((lead: any) => {
+          if (lead.status === 'unassigned') metrics.pending++
+          else if (lead.status === 'approved') metrics.approved++
+          else if (lead.status === 'scheduled') metrics.scheduled++
+          else if (lead.status === 'declined') metrics.declined++
+        })
+        setLeadStatusMetrics(metrics)
+
         // Calculate lead generator performance
         const generatorPerformanceMap = new Map<string, LeadGeneratorPerformance>()
         const allGeneratorsSet = new Set<string>()
@@ -821,30 +838,15 @@ export default function ManagerPortal() {
 
         allGeneratorsSet.forEach((generatorId: string) => {
           const generatorLeads = (freshLeads || []).filter((l: any) => l.created_by === generatorId)
-          let approved = 0, declined = 0, scheduled = 0
-          const leadsWithAction = new Set<string>()
+          let approved = 0, declined = 0, scheduled = 0, pending = 0
           
           generatorLeads.forEach((lead: any) => {
-            const leadResponses = responseMapByLeadAndCallerId.get(lead.id)
-            if (leadResponses && leadResponses.size > 0) {
-              // Get the LATEST action across ALL employees for this lead
-              // Since responses are ordered by created_at DESC, the first one we encounter is the latest
-              let latestAction: string | null = null
-              for (const action of leadResponses.values()) {
-                latestAction = action
-                break // Take only the first (latest) action
-              }
-              
-              if (latestAction) {
-                leadsWithAction.add(lead.id)
-                if (latestAction === 'approved') approved++
-                else if (latestAction === 'declined') declined++
-                else if (latestAction === 'scheduled') scheduled++
-              }
-            }
+            if (lead.status === 'approved') approved++
+            else if (lead.status === 'declined') declined++
+            else if (lead.status === 'scheduled') scheduled++
+            else if (lead.status === 'unassigned') pending++
           })
 
-          const pending = generatorLeads.length - leadsWithAction.size
           const total = approved + declined + scheduled
           const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
 
@@ -994,6 +996,21 @@ export default function ManagerPortal() {
       
       setAllUsers(Array.from(uniqueUsersMap.values()))
       setLeads(leadRes.data || [])
+
+      // Calculate lead status metrics
+      const metrics = {
+        pending: 0,
+        approved: 0,
+        scheduled: 0,
+        declined: 0
+      }
+      ;(leadRes.data || []).forEach((lead: any) => {
+        if (lead.status === 'unassigned') metrics.pending++
+        else if (lead.status === 'approved') metrics.approved++
+        else if (lead.status === 'scheduled') metrics.scheduled++
+        else if (lead.status === 'declined') metrics.declined++
+      })
+      setLeadStatusMetrics(metrics)
     } catch (error) {
       console.error('Error refreshing setup tab:', error)
     } finally {
@@ -1140,7 +1157,7 @@ export default function ManagerPortal() {
           </Button>
         </div>
 
-        {/* Summary Cards - 5 Metrics in One Line */}
+        {/* Summary Cards - 5 Metrics + 4 Lead Status Metrics in Multiple Rows */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
           <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
             <CardContent className="pt-3 pb-3 px-4 text-center">
@@ -1179,6 +1196,42 @@ export default function ManagerPortal() {
               <p className="text-xs font-medium text-muted-foreground mb-1">Total Leads</p>
               <p className="text-2xl font-bold text-primary">
                 {leads.length}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Lead Status Summary Cards - 4 Status Metrics Centered with Same Width */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6 mx-auto w-full lg:w-4/5">
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Pending Leads</p>
+              <p className="text-2xl font-bold text-primary">
+                {leadStatusMetrics.pending}
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Approved Leads</p>
+              <p className="text-2xl font-bold text-primary">
+                {leadStatusMetrics.approved}
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Scheduled Leads</p>
+              <p className="text-2xl font-bold text-primary">
+                {leadStatusMetrics.scheduled}
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Declined Leads</p>
+              <p className="text-2xl font-bold text-primary">
+                {leadStatusMetrics.declined}
               </p>
             </CardContent>
           </Card>

@@ -212,14 +212,6 @@ export default function LeadList() {
   useEffect(() => {
     if (cityId) {
       fetchLeads(false)
-      
-      // Auto-refresh every 10 seconds to pick up changes from other users
-      const interval = setInterval(() => {
-        fetchLeads(false)
-      }, 10000)
-      
-      // Cleanup interval on unmount
-      return () => clearInterval(interval)
     }
   }, [cityId, supabase])
 
@@ -374,7 +366,7 @@ export default function LeadList() {
         {/* Performance Dialog */}
         <Dialog open={performanceOpen} onOpenChange={setPerformanceOpen}>
           <DialogContent className="max-w-md">
-            <DialogHeader>
+            <DialogHeader className="pb-2">
               <DialogTitle>City Performance</DialogTitle>
               <DialogDescription>Your performance in this city</DialogDescription>
             </DialogHeader>

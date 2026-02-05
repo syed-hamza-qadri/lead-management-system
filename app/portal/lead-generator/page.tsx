@@ -149,33 +149,16 @@ export default function LeadGenerator() {
       setCities(citiesData || [])
       setAllLeads((leadsData || []).slice(0, 500))
 
-      // Calculate performance metrics for this lead generator
-      let approved = 0, declined = 0, scheduled = 0
-      const leadsWithAction = new Set<string>()
-      const leadLatestAction = new Map<string, string>()
+      // Calculate performance metrics for this lead generator based on lead.status
+      let approved = 0, declined = 0, scheduled = 0, pending = 0
       
-      // Get all responses for this generator's leads
-      const leadIds = (leadsData || []).map((l: any) => l.id)
-      if (leadIds.length > 0) {
-        const { data: responses } = await supabase
-          .from('lead_responses')
-          .select('lead_id, action')
-          .in('lead_id', leadIds)
-          .order('created_at', { ascending: false })
-        
-        ;(responses || []).forEach((r: any) => {
-          // Only count the first occurrence (latest due to DESC order)
-          if (!leadLatestAction.has(r.lead_id)) {
-            leadLatestAction.set(r.lead_id, r.action)
-            leadsWithAction.add(r.lead_id)
-            if (r.action === 'approved') approved++
-            else if (r.action === 'declined') declined++
-            else if (r.action === 'scheduled') scheduled++
-          }
-        })
-      }
+      ;(leadsData || []).forEach((lead: any) => {
+        if (lead.status === 'approved') approved++
+        else if (lead.status === 'declined') declined++
+        else if (lead.status === 'scheduled') scheduled++
+        else if (lead.status === 'unassigned') pending++
+      })
       
-      const pending = (leadsData || []).length - leadsWithAction.size
       const total = approved + declined + scheduled
       const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
       
@@ -213,33 +196,16 @@ export default function LeadGenerator() {
 
       setAllLeads((leadsData || []).slice(0, 500))
 
-      // Calculate performance metrics for this lead generator
-      let approved = 0, declined = 0, scheduled = 0
-      const leadsWithAction = new Set<string>()
-      const leadLatestAction = new Map<string, string>()
+      // Calculate performance metrics for this lead generator based on lead.status
+      let approved = 0, declined = 0, scheduled = 0, pending = 0
       
-      // Get all responses for this generator's leads
-      const leadIds = (leadsData || []).map((l: any) => l.id)
-      if (leadIds.length > 0) {
-        const { data: responses } = await supabase
-          .from('lead_responses')
-          .select('lead_id, action')
-          .in('lead_id', leadIds)
-          .order('created_at', { ascending: false })
-        
-        ;(responses || []).forEach((r: any) => {
-          // Only count the first occurrence (latest due to DESC order)
-          if (!leadLatestAction.has(r.lead_id)) {
-            leadLatestAction.set(r.lead_id, r.action)
-            leadsWithAction.add(r.lead_id)
-            if (r.action === 'approved') approved++
-            else if (r.action === 'declined') declined++
-            else if (r.action === 'scheduled') scheduled++
-          }
-        })
-      }
+      ;(leadsData || []).forEach((lead: any) => {
+        if (lead.status === 'approved') approved++
+        else if (lead.status === 'declined') declined++
+        else if (lead.status === 'scheduled') scheduled++
+        else if (lead.status === 'unassigned') pending++
+      })
       
-      const pending = (leadsData || []).length - leadsWithAction.size
       const total = approved + declined + scheduled
       const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
       
@@ -358,12 +324,12 @@ export default function LeadGenerator() {
     }
   }
 
-  const truncateDetails = (text: string, lines: number = 2) => {
+  const truncateDetails = (text: string, lines: number = 1) => {
     const lineArray = text.split('\n')
     if (lineArray.length > lines) {
       return lineArray.slice(0, lines).join('\n') + '...'
     }
-    return text.length > 50 ? text.substring(0, 50) + '...' : text
+    return text.length > 60 ? text.substring(0, 60) + '...' : text
   }
 
   const handleEditLead = (lead: Lead) => {
@@ -670,13 +636,13 @@ export default function LeadGenerator() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-border">
-                        <th className="text-left px-6 py-3 font-semibold w-12">#</th>
-                        <th className="text-left px-6 py-3 font-semibold">Name</th>
-                        <th className="text-left px-6 py-3 font-semibold">Niche</th>
-                        <th className="text-left px-6 py-3 font-semibold">City</th>
-                        <th className="text-left px-6 py-3 font-semibold">Details</th>
-                        <th className="text-left px-6 py-3 font-semibold">Created At</th>
-                        <th className="text-left px-6 py-3 font-semibold">Actions</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm w-8">#</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Name</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Niche</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">City</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Details</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Created At</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -693,33 +659,33 @@ export default function LeadGenerator() {
                         const createdDate = new Date(lead.created_at).toLocaleString()
                         return (
                           <tr key={lead.id} className="border-b border-border hover:bg-muted/50 transition-colors">
-                            <td className="px-6 py-4 text-sm font-medium text-muted-foreground">{index + 1}</td>
-                            <td className="px-6 py-4 font-medium cursor-pointer text-primary hover:underline" onClick={() => {
+                            <td className="px-4 py-3 text-sm font-medium text-muted-foreground">{index + 1}</td>
+                            <td className="px-4 py-3 text-sm font-medium cursor-pointer text-primary hover:underline" onClick={() => {
                               setSelectedLeadForDetails(lead)
                               setLeadDetailsDialogOpen(true)
                             }}>{lead.data.name}</td>
-                            <td className="px-6 py-4 text-sm">{niche?.name}</td>
-                            <td className="px-6 py-4 text-sm">{city?.name}</td>
-                            <td className="px-6 py-4 text-sm text-muted-foreground whitespace-pre-wrap max-w-xs">{truncateDetails(lead.data.details)}</td>
-                            <td className="px-6 py-4 text-sm">{createdDate}</td>
-                            <td className="px-6 py-4">
+                            <td className="px-4 py-3 text-sm">{niche?.name}</td>
+                            <td className="px-4 py-3 text-sm">{city?.name}</td>
+                            <td className="px-4 py-3 text-sm text-muted-foreground line-clamp-2 break-words max-w-xs">{truncateDetails(lead.data.details, 1)}</td>
+                            <td className="px-4 py-3 text-sm whitespace-nowrap">{createdDate}</td>
+                            <td className="px-4 py-3">
                               <div className="flex gap-2">
                                 <Button
                                   variant="outline"
                                   size="sm"
                                   onClick={() => handleEditLead(lead)}
-                                  className="flex items-center gap-1"
+                                  className="flex items-center gap-1 text-xs h-7 px-2"
                                 >
-                                  <Edit2 className="w-4 h-4" />
+                                  <Edit2 className="w-3 h-3" />
                                   Edit
                                 </Button>
                                 <Button
                                   variant="destructive"
                                   size="sm"
                                   onClick={() => handleDeleteLead(lead.id)}
-                                  className="flex items-center gap-1"
+                                  className="flex items-center gap-1 text-xs h-7 px-2"
                                 >
-                                  <Trash2 className="w-4 h-4" />
+                                  <Trash2 className="w-3 h-3" />
                                   Delete
                                 </Button>
                               </div>
@@ -860,11 +826,11 @@ export default function LeadGenerator() {
                         <table className="w-full">
                           <thead>
                             <tr className="border-b border-border">
-                              <th className="text-left px-6 py-3 font-semibold w-12">#</th>
-                              <th className="text-left px-6 py-3 font-semibold">Name</th>
-                              <th className="text-left px-6 py-3 font-semibold">Created At</th>
-                              <th className="text-left px-6 py-3 font-semibold">Details</th>
-                              <th className="text-left px-6 py-3 font-semibold">Status</th>
+                              <th className="text-left px-4 py-3 font-semibold text-sm w-8">#</th>
+                              <th className="text-left px-4 py-3 font-semibold text-sm">Name</th>
+                              <th className="text-left px-4 py-3 font-semibold text-sm">Created At</th>
+                              <th className="text-left px-4 py-3 font-semibold text-sm">Details</th>
+                              <th className="text-left px-4 py-3 font-semibold text-sm">Status</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -878,14 +844,14 @@ export default function LeadGenerator() {
                               
                               return (
                                 <tr key={lead.id} className="border-b border-border hover:bg-muted/50 transition-colors">
-                                  <td className="px-6 py-4 text-sm font-medium text-muted-foreground">{index + 1}</td>
-                                  <td className="px-6 py-4 font-medium cursor-pointer text-primary hover:underline" onClick={() => {
+                                  <td className="px-4 py-3 text-sm font-medium text-muted-foreground">{index + 1}</td>
+                                  <td className="px-4 py-3 text-sm font-medium cursor-pointer text-primary hover:underline" onClick={() => {
                                     setSelectedLeadForDetails(lead)
                                     setLeadDetailsDialogOpen(true)
                                   }}>{lead.data.name}</td>
-                                  <td className="px-6 py-4 text-sm">{createdDate}</td>
-                                  <td className="px-6 py-4 text-sm text-muted-foreground whitespace-pre-wrap max-w-xs">{truncateDetails(lead.data.details)}</td>
-                                  <td className="px-6 py-4">
+                                  <td className="px-4 py-3 text-sm whitespace-nowrap">{createdDate}</td>
+                                  <td className="px-4 py-3 text-sm text-muted-foreground line-clamp-2 break-words max-w-xs">{truncateDetails(lead.data.details, 1)}</td>
+                                  <td className="px-4 py-3">
                                     <Badge className={statusColor}>
                                       {lead.status.charAt(0).toUpperCase() + lead.status.slice(1)}
                                     </Badge>

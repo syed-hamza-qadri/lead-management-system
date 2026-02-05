@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Loader2, ChevronRight, LogOut, BarChart3 } from 'lucide-react'
+import { Loader2, ChevronRight, LogOut, BarChart3, RefreshCw } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
 interface Lead {
@@ -43,6 +43,7 @@ export default function CallerPortal() {
   const { session, loading: sessionLoading } = useSession()
 
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [leads, setLeads] = useState<Lead[]>([])
   const [niches, setNiches] = useState<NicheData[]>([])
   const [cities, setCities] = useState<CityData[]>([])
@@ -92,9 +93,15 @@ export default function CallerPortal() {
     }
   }, [selectedNiche, cities])
 
-  const fetchData = async () => {
-    try {
+  const fetchData = async (isRefresh: boolean = false) => {
+    if (isRefresh) {
+      setRefreshing(true)
+    } else {
       setLoading(true)
+    }
+    
+    try {
+      setLoading(false)
       if (!session?.user_id) {
         router.push('/portal')
         return
@@ -123,35 +130,20 @@ export default function CallerPortal() {
       setCities(typedCities)
       setLeads(leadsData)
       
-      // Calculate performance metrics for this caller
+      // Calculate performance metrics based on current lead status (not just caller's actions)
+      // This ensures we show metrics updated by any user (including managers)
       let approved = 0, declined = 0, scheduled = 0, pending = 0
-      const leadsWithAction = new Set<string>()
-      const leadLatestAction = new Map<string, string>()
       
-      // Get all responses for this caller's leads
-      const leadIds = leadsData.map((l: any) => l.id)
-      if (leadIds.length > 0) {
-        const { data: responses } = await supabase
-          .from('lead_responses')
-          .select('lead_id, action')
-          .in('lead_id', leadIds)
-          .eq('employee_id', session.user_id)
-          .order('created_at', { ascending: false })
-        
-        ;(responses || []).forEach((r: any) => {
-          // Only count the first occurrence (latest due to DESC order)
-          if (!leadLatestAction.has(r.lead_id)) {
-            leadLatestAction.set(r.lead_id, r.action)
-            leadsWithAction.add(r.lead_id)
-            if (r.action === 'approved') approved++
-            else if (r.action === 'declined') declined++
-            else if (r.action === 'scheduled') scheduled++
-          }
-        })
-      }
+      leadsData.forEach((lead: any) => {
+        const status = lead.status
+        if (status === 'approved') approved++
+        else if (status === 'declined') declined++
+        else if (status === 'scheduled') scheduled++
+        else if (status === 'unassigned') pending++
+      })
       
-      pending = leadsData.length - leadsWithAction.size
-      const conversionRate = leadsData.length > 0 ? Math.round((approved / leadsData.length) * 100) : 0
+      const total = approved + declined + scheduled
+      const conversionRate = total > 0 ? Math.round((approved / total) * 100) : 0
       
       setPerformance({
         totalNiches: typedNiches.length,
@@ -163,6 +155,13 @@ export default function CallerPortal() {
         pending,
         conversionRate
       })
+
+      if (isRefresh) {
+        toast({
+          title: 'Refreshed',
+          description: 'Leads and metrics updated successfully',
+        })
+      }
     } catch (error) {
       console.error('Error fetching data:', error)
       toast({
@@ -172,6 +171,7 @@ export default function CallerPortal() {
       })
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }
 
@@ -302,6 +302,15 @@ export default function CallerPortal() {
             <p className="text-muted-foreground mt-2">Welcome, {session?.user_name}. Select a niche to view available leads</p>
           </div>
           <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              onClick={() => fetchData(true)} 
+              disabled={refreshing}
+              className="flex items-center gap-2"
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Updating...' : 'Refresh'}
+            </Button>
             <Button variant="outline" onClick={() => setPerformanceOpen(true)} className="flex items-center gap-2">
               <BarChart3 className="w-4 h-4" />
               Status
@@ -390,7 +399,7 @@ export default function CallerPortal() {
         {/* Performance Dialog */}
         <Dialog open={performanceOpen} onOpenChange={setPerformanceOpen}>
           <DialogContent className="max-w-md">
-            <DialogHeader>
+            <DialogHeader className="pb-2">
               <DialogTitle>Your Performance Metrics</DialogTitle>
               <DialogDescription>Overview of your performance and capacity</DialogDescription>
             </DialogHeader>
