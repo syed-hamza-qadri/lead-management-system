@@ -82,6 +82,10 @@ export default function LeadGenerator() {
   const [selectedLeadForDetails, setSelectedLeadForDetails] = useState<any>(null)
   const [leadDetailsDialogOpen, setLeadDetailsDialogOpen] = useState(false)
   
+  // Edit lead details in modal
+  const [editDetailsModalOpen, setEditDetailsModalOpen] = useState(false)
+  const [editDetailsText, setEditDetailsText] = useState('')
+  
   // Delete confirmation
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [leadToDelete, setLeadToDelete] = useState<string | null>(null)
@@ -543,14 +547,24 @@ export default function LeadGenerator() {
                 </div>
 
                 <div>
-                  <Label htmlFor="details" className="mb-2 block">Lead Details</Label>
-                  <Textarea
-                    id="details"
-                    placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890"
-                    value={leadDetails}
-                    onChange={(e) => setLeadDetails(e.target.value)}
-                    rows={3}
-                  />
+                  <Label htmlFor="details" className="mb-2 block flex items-center justify-between">
+                    <span>Lead Details</span>
+                    <span className="text-xs text-muted-foreground">(Double-click to expand)</span>
+                  </Label>
+                  <div className="relative border rounded-md bg-background h-48 overflow-y-auto">
+                    <Textarea
+                      id="details"
+                      placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890"
+                      value={leadDetails}
+                      onChange={(e) => setLeadDetails(e.target.value)}
+                      onDoubleClick={() => {
+                        setEditDetailsText(leadDetails)
+                        setEditDetailsModalOpen(true)
+                      }}
+                      rows={5}
+                      className="resize-none h-full border-0"
+                    />
+                  </div>
                 </div>
 
                 <Button type="submit" disabled={creating} className="w-full">
@@ -986,6 +1000,50 @@ export default function LeadGenerator() {
                 </div>
               )
             })()}
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Lead Details Modal */}
+        <Dialog open={editDetailsModalOpen} onOpenChange={setEditDetailsModalOpen}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Edit Lead Details</DialogTitle>
+              <DialogDescription>Edit the lead details with a larger input area</DialogDescription>
+            </DialogHeader>
+            
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="edit-details" className="mb-2 block">Lead Details</Label>
+                <Textarea
+                  id="edit-details"
+                  value={editDetailsText}
+                  onChange={(e) => setEditDetailsText(e.target.value)}
+                  placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890&#10;address=123 Main St"
+                  rows={12}
+                  className="w-full resize-none"
+                />
+                <p className="text-xs text-muted-foreground mt-2">
+                  Format: key=value pairs separated by commas or newlines
+                </p>
+              </div>
+              
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => setEditDetailsModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    setLeadDetails(editDetailsText)
+                    setEditDetailsModalOpen(false)
+                  }}
+                >
+                  Save Changes
+                </Button>
+              </div>
+            </div>
           </DialogContent>
         </Dialog>
 
