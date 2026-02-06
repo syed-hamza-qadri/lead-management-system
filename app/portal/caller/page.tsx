@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
 import { useSession } from '@/lib/session'
 import { getCallerLeads, getCallerNiches, getCallerCities } from '@/lib/auth'
+import { useDebounce } from '@/lib/debounce'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -74,6 +75,7 @@ export default function CallerPortal() {
 
   // Search and filter
   const [searchTerm, setSearchTerm] = useState('')
+  const debouncedSearchTerm = useDebounce(searchTerm, 300)
 
   useEffect(() => {
     if (!sessionLoading && !session) {
@@ -261,7 +263,7 @@ export default function CallerPortal() {
   }
 
   const filteredLeads = leads.filter(lead => {
-    const matchesSearch = lead.data.name?.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesSearch = lead.data.name?.toLowerCase().includes(debouncedSearchTerm.toLowerCase())
     const matchesCity = !selectedCity || lead.city_id === selectedCity
 
     return matchesSearch && matchesCity

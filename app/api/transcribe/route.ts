@@ -16,9 +16,6 @@ export async function POST(request: NextRequest) {
     // Use Deepgram API (free tier available)
     const deepgramApiKey = process.env.DEEPGRAM_API_KEY
 
-    console.log('[Transcribe API] API Key exists:', !!deepgramApiKey)
-    console.log('[Transcribe API] Audio blob size:', audioBlob.size, 'bytes')
-
     if (!deepgramApiKey) {
       console.error('[Transcribe API] DEEPGRAM_API_KEY is not set')
       return NextResponse.json(
@@ -30,8 +27,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    console.log('[Transcribe API] Sending to Deepgram...')
-
     const response = await fetch('https://api.deepgram.com/v1/listen?model=nova-2&language=en', {
       method: 'POST',
       headers: {
@@ -40,8 +35,6 @@ export async function POST(request: NextRequest) {
       },
       body: buffer,
     })
-
-    console.log('[Transcribe API] Deepgram response status:', response.status)
 
     if (!response.ok) {
       const error = await response.text()
@@ -54,8 +47,6 @@ export async function POST(request: NextRequest) {
 
     const result = await response.json() as any
     const transcript = result.results?.channels[0]?.alternatives[0]?.transcript || ''
-
-    console.log('[Transcribe API] Transcript:', transcript)
 
     return NextResponse.json({ transcript })
   } catch (error) {

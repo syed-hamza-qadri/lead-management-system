@@ -4,9 +4,9 @@
 -- Purpose: Track which user (lead_generator) created each lead
 -- ============================================================================
 
--- Add created_by column to leads table
+-- Add created_by column to leads table (if it doesn't exist)
 ALTER TABLE leads
-ADD COLUMN created_by UUID REFERENCES users(id) ON DELETE SET NULL;
+ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id) ON DELETE SET NULL;
 
 -- Add index on created_by for performance
 CREATE INDEX IF NOT EXISTS idx_leads_created_by ON leads(created_by);

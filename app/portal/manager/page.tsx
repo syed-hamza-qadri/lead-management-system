@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
 import { useSession } from '@/lib/session'
+import { useDebounce } from '@/lib/debounce'
 import {
   getManagerCallers,
   assignNicheToCaller,
@@ -126,6 +127,9 @@ export default function ManagerPortal() {
   const [leadCreatedByFilter, setLeadCreatedByFilter] = useState<string>('')
   const [leadAssignedToFilter, setLeadAssignedToFilter] = useState<string>('')
   const [leadStatusFilter, setLeadStatusFilter] = useState<string>('')
+  
+  // Debounced search for better performance
+  const debouncedSearchFilter = useDebounce(leadSearchFilter, 300)
 
   // Setup tab states
   const [setupDialogs, setSetupDialogs] = useState<{
@@ -2018,7 +2022,7 @@ export default function ManagerPortal() {
                     <tbody>
                       {leads
                         .filter(lead => {
-                          const searchMatch = !leadSearchFilter || (lead.data?.name || 'Lead').toLowerCase().includes(leadSearchFilter.toLowerCase())
+                          const searchMatch = !debouncedSearchFilter || (lead.data?.name || 'Lead').toLowerCase().includes(debouncedSearchFilter.toLowerCase())
                           const nicheMatch = !leadNicheFilter || lead.niche_id === leadNicheFilter
                           const cityMatch = !leadCityFilter || lead.city_id === leadCityFilter
                           const createdByMatch = !leadCreatedByFilter || lead.creator?.id === leadCreatedByFilter

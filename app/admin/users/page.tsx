@@ -173,8 +173,6 @@ export default function UserManagement() {
         })
         .eq('id', editingUserId)
 
-      console.log('[v0] Update response:', { data, error })
-
       if (error) {
         throw new Error(error.message || JSON.stringify(error))
       }

@@ -193,8 +193,6 @@ export default function LeadDetail() {
       return
     }
 
-    console.log('[v0] handleAction - userId:', userId, 'leadId:', leadId, 'action:', action)
-
     if (!action) {
       toast({
         title: 'Error',

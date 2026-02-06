@@ -105,9 +105,7 @@ export async function POST(request: NextRequest) {
 
     // Return user data with token in secure HttpOnly cookie
     const { password: _, ...userWithoutPassword } = user
-    
-    console.log('[v0] Login successful, returning user:', userWithoutPassword)
-    
+
     const response = NextResponse.json({
       user: userWithoutPassword,
       message: 'Login successful',
