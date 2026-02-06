@@ -143,6 +143,8 @@ export default function ManagerPortal() {
     leadDetails?: string
   }>({})
   const [setupSaving, setSetupSaving] = useState(false)
+  const [setupEditDetailsModalOpen, setSetupEditDetailsModalOpen] = useState(false)
+  const [setupEditDetailsText, setSetupEditDetailsText] = useState('')
   const [editingNiche, setEditingNiche] = useState<{id: string, name: string} | null>(null)
   const [editingCity, setEditingCity] = useState<{id: string, name: string, niche_id: string} | null>(null)
   
@@ -153,7 +155,7 @@ export default function ManagerPortal() {
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const [scheduleDays, setScheduleDays] = useState<string>('')
   const [statusMessage, setStatusMessage] = useState<string>('')
-  const [editingLeadDetails, setEditingLeadDetails] = useState<{ index: number; name: string; callerName: string } | null>(null)
+  const [editingLeadDetails, setEditingLeadDetails] = useState<{ index: number; name: string; callerName: string; leadId?: string; nicheId?: string; cityId?: string; lastActionBy?: string; lastActionTime?: string } | null>(null)
   
   // Lead status summary metrics
   const [leadStatusMetrics, setLeadStatusMetrics] = useState({
@@ -1902,7 +1904,7 @@ export default function ManagerPortal() {
                       placeholder="Search by lead name..."
                       value={leadSearchFilter}
                       onChange={(e) => setLeadSearchFilter(e.target.value)}
-                      className="w-full"
+                      className="w-full rounded-lg"
                     />
                   </div>
                   <div className="w-[120px] shrink-0">
@@ -2170,10 +2172,31 @@ export default function ManagerPortal() {
                                     // Pre-fill message with existing response_text if available
                                     const existingResponse = leadResponses[lead.id]
                                     setStatusMessage(existingResponse?.response_text || '')
+                                    
+                                    // Get last action employee name and time
+                                    let lastActionBy = 'Unknown'
+                                    let lastActionTime = ''
+                                    if (existingResponse?.employee_id) {
+                                      const actionEmployee = allUsers.find(u => u.id === existingResponse.employee_id)
+                                      lastActionBy = actionEmployee?.name || 'Unknown'
+                                      if (existingResponse.actioned_at) {
+                                        const actionDate = new Date(existingResponse.actioned_at)
+                                        lastActionTime = actionDate.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                      }
+                                    }
+                                    
+                                    const niche = niches.find(n => n.id === lead.niche_id)
+                                    const city = cities.find(c => c.id === lead.city_id)
+                                    
                                     setEditingLeadDetails({
                                       index: index + 1,
                                       name: lead.data?.name || 'Lead',
-                                      callerName: assignedCaller?.name || 'Unassigned'
+                                      callerName: assignedCaller?.name || 'Unassigned',
+                                      leadId: lead.id,
+                                      nicheId: lead.niche_id,
+                                      cityId: lead.city_id,
+                                      lastActionBy,
+                                      lastActionTime
                                     })
                                     setStatusDialogOpen(true)
                                   }}
@@ -2206,10 +2229,24 @@ export default function ManagerPortal() {
               
               <div className="space-y-4">
                 {editingLeadDetails && (
-                  <div className="bg-muted p-3 rounded space-y-1 text-sm">
+                  <div className="bg-muted p-4 rounded space-y-2 text-sm">
                     <div><span className="font-semibold">S.No:</span> {editingLeadDetails.index}</div>
                     <div><span className="font-semibold">Business Name:</span> {editingLeadDetails.name}</div>
                     <div><span className="font-semibold">Caller Name:</span> {editingLeadDetails.callerName}</div>
+                    {editingLeadDetails.nicheId && (
+                      <div><span className="font-semibold">Niche:</span> {niches.find(n => n.id === editingLeadDetails.nicheId)?.name || 'Unknown'}</div>
+                    )}
+                    {editingLeadDetails.cityId && (
+                      <div><span className="font-semibold">City:</span> {cities.find(c => c.id === editingLeadDetails.cityId)?.name || 'Unknown'}</div>
+                    )}
+                    {editingLeadDetails.lastActionBy && editingLeadDetails.lastActionBy !== 'Unknown' && (
+                      <div className="pt-2 border-t mt-2 space-y-1">
+                        <div><span className="font-semibold">Last Action By:</span> {editingLeadDetails.lastActionBy}</div>
+                        {editingLeadDetails.lastActionTime && (
+                          <div><span className="font-semibold">Last Action Time:</span> {editingLeadDetails.lastActionTime}</div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
                 
@@ -2717,14 +2754,24 @@ export default function ManagerPortal() {
                             />
                           </div>
                           <div>
-                            <Label htmlFor="lead-details" className="mb-2 block">Additional Details (Optional)</Label>
-                            <Input
-                              id="lead-details"
-                              placeholder="key=value format, one per line"
-                              value={setupForms.leadDetails || ''}
-                              onChange={(e) => setSetupForms({...setupForms, leadDetails: e.target.value})}
-                              className="h-20"
-                            />
+                            <Label htmlFor="lead-details" className="mb-2 block flex items-center justify-between">
+                              <span>Lead Details</span>
+                              <span className="text-xs text-muted-foreground">(Double-click to expand)</span>
+                            </Label>
+                            <div className="relative border rounded-md bg-background h-32 overflow-y-auto">
+                              <Textarea
+                                id="lead-details"
+                                placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890"
+                                value={setupForms.leadDetails || ''}
+                                onChange={(e) => setSetupForms({...setupForms, leadDetails: e.target.value})}
+                                onDoubleClick={() => {
+                                  setSetupEditDetailsText(setupForms.leadDetails || '')
+                                  setSetupEditDetailsModalOpen(true)
+                                }}
+                                rows={3}
+                                className="resize-none h-full border-0"
+                              />
+                            </div>
                           </div>
                           <Button type="submit" disabled={setupSaving} className="w-full">
                             {setupSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
@@ -2740,6 +2787,40 @@ export default function ManagerPortal() {
             </Card>
           </TabsContent>
         </Tabs>
+
+        {/* Setup Edit Lead Details Modal */}
+        <Dialog open={setupEditDetailsModalOpen} onOpenChange={setSetupEditDetailsModalOpen}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Edit Lead Details</DialogTitle>
+            </DialogHeader>
+            
+            <Textarea
+              value={setupEditDetailsText}
+              onChange={(e) => setSetupEditDetailsText(e.target.value)}
+              placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890&#10;address=123 Main St"
+              rows={16}
+              className="w-full resize-none"
+            />
+              
+            <div className="flex gap-2 justify-end">
+              <Button
+                variant="outline"
+                onClick={() => setSetupEditDetailsModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  setSetupForms({...setupForms, leadDetails: setupEditDetailsText})
+                  setSetupEditDetailsModalOpen(false)
+                }}
+              >
+                Save Changes
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Lead Details Dialog */}
         <Dialog open={leadDetailsDialogOpen} onOpenChange={setLeadDetailsDialogOpen}>
