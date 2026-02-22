@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
 import { useToast } from '@/hooks/use-toast'
+import { wasLeadPreviouslyScheduled } from '@/lib/auth'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +23,7 @@ interface Lead {
 interface LeadWithSchedule extends Lead {
   daysRemaining?: number
   was_later?: boolean  // Track if lead was previously scheduled
+  wasScheduled?: boolean  // Database-backed flag for Later - Unassigned
   lastActionedAt?: string  // Track when the last action was taken
   lastAction?: string  // Track what the last action was
 }
@@ -89,42 +91,25 @@ export default function LeadList() {
 
     // Create lookup maps for quick access
     const scheduledMap = new Map<string, string>()
-    const actionMap = new Map<string, { action: string; actioned_at: string }>()
+    const actionMapInitial = new Map<string, { action: string; actioned_at: string }>()
     ;(responseData || []).forEach((response: any) => {
       if (!scheduledMap.has(response.lead_id)) {
         scheduledMap.set(response.lead_id, response.scheduled_for)
       }
-      if (!actionMap.has(response.lead_id)) {
-        actionMap.set(response.lead_id, {
+      if (!actionMapInitial.has(response.lead_id)) {
+        actionMapInitial.set(response.lead_id, {
           action: response.action,
           actioned_at: response.actioned_at || response.created_at
         })
       }
     })
 
-    // Calculate performance metrics from responses - only count latest per lead
-    let approved = 0, declined = 0, scheduled = 0
-    const leadsWithAction = new Set<string>()
-    const leadLatestAction = new Map<string, string>()
-    ;(responseData || []).forEach((response: any) => {
-      // Only count the first occurrence (latest due to DESC order)
-      if (!leadLatestAction.has(response.lead_id)) {
-        leadLatestAction.set(response.lead_id, response.action)
-        leadsWithAction.add(response.lead_id)
-        if (response.action === 'approved') approved++
-        else if (response.action === 'declined') declined++
-        else if (response.action === 'scheduled') scheduled++
-      }
-    })
-    
-    const pending = (data || []).length - leadsWithAction.size
-    setPerformance({ approved, declined, scheduled, pending })
-
-    // Enrich leads using maps (no additional queries)
-    const enrichedLeads = (data || []).map((lead: any) => {
+    // Enrich leads using maps (no additional queries) and check for wasScheduled flag
+    const enrichedLeads = await Promise.all((data || []).map(async (lead: any) => {
       let daysRemaining = 0
       let wasLater = false
-      const actionInfo = actionMap.get(lead.id)
+      let wasScheduled = false
+      const actionInfo = actionMapInitial.get(lead.id)
 
       if (lead.status === 'scheduled' && lead.follow_up_date) {
         const scheduledDate = new Date(lead.follow_up_date)
@@ -141,18 +126,53 @@ export default function LeadList() {
             .eq('id', lead.id)
             .then()
           wasLater = true  // Mark that this was previously scheduled
-          return { ...lead, status: 'unassigned', daysRemaining: 0, was_later: true, lastActionedAt: actionInfo?.actioned_at, lastAction: actionInfo?.action }
+          wasScheduled = true  // Flag for Later - Unassigned
+          return { 
+            ...lead, 
+            status: 'unassigned', 
+            daysRemaining: 0, 
+            was_later: true, 
+            wasScheduled: true,
+            lastActionedAt: actionInfo?.actioned_at, 
+            lastAction: actionInfo?.action 
+          }
         }
       }
 
-      return { ...lead, daysRemaining, was_later: wasLater, lastActionedAt: actionInfo?.actioned_at, lastAction: actionInfo?.action }
+      // For unassigned leads, check if they were previously scheduled
+      if (lead.status === 'unassigned') {
+        wasScheduled = await wasLeadPreviouslyScheduled(lead.id)
+      }
+
+      return { 
+        ...lead, 
+        daysRemaining, 
+        was_later: wasLater, 
+        wasScheduled: wasScheduled,
+        lastActionedAt: actionInfo?.actioned_at, 
+        lastAction: actionInfo?.action 
+      }
+    }))
+
+    // Calculate performance metrics AFTER enrichment, based on CURRENT LEAD STATUS (not response action)
+    // This ensures Later - Unassigned leads count as Pending when scheduled date passes
+    let approved = 0, declined = 0, scheduled = 0, pending = 0
+    
+    enrichedLeads.forEach((lead: any) => {
+      const status = lead.status
+      if (status === 'approved') approved++
+      else if (status === 'declined') declined++
+      else if (status === 'scheduled') scheduled++
+      else if (status === 'unassigned') pending++  // Includes Later - Unassigned
     })
+    
+    setPerformance({ approved, declined, scheduled, pending })
 
     // Sort assigned leads: scheduled first (by days), then approved (by action time), then declined (by action time)
     const sorted = enrichedLeads.sort((a: any, b: any) => {
-      // Leads that were previously scheduled come first (top of unassigned)
-      if (a.was_later && !b.was_later) return -1
-      if (!a.was_later && b.was_later) return 1
+      // Leads that were previously scheduled (Later - Unassigned) come first (top of unassigned)
+      if (a.wasScheduled && !b.wasScheduled) return -1
+      if (!a.wasScheduled && b.wasScheduled) return 1
       
       // For assigned tab: prioritize by status
       // 1. Scheduled leads first (by days remaining - fewest days first)
@@ -215,8 +235,8 @@ export default function LeadList() {
     }
   }, [cityId, supabase])
 
-  const getStatusColor = (status: string, was_later?: boolean) => {
-    if (was_later && status === 'unassigned') {
+  const getStatusColor = (status: string, wasScheduled?: boolean) => {
+    if (wasScheduled && status === 'unassigned') {
       return 'bg-purple-100 text-purple-700 border-purple-200'  // Purple for "Later - Unassigned"
     }
     const colors: Record<string, string> = {
@@ -282,9 +302,9 @@ export default function LeadList() {
               </div>
               <Badge 
                 variant="outline" 
-                className={`text-xs px-2 py-1 font-semibold whitespace-nowrap border ${getStatusColor(lead.status, lead.was_later)}`}
+                className={`text-xs px-2 py-1 font-semibold whitespace-nowrap border ${getStatusColor(lead.status, lead.wasScheduled)}`}
               >
-                {lead.was_later && lead.status === 'unassigned' 
+                {lead.wasScheduled && lead.status === 'unassigned' 
                   ? 'Later - Unassigned' 
                   : lead.status.charAt(0).toUpperCase() + lead.status.slice(1)
                 }
@@ -399,7 +419,10 @@ export default function LeadList() {
                 <div className="flex justify-between items-center pt-2 border-t border-border">
                   <span className="font-semibold">Conversion Rate:</span>
                   <Badge className="bg-gray-100 text-gray-900">
-                    {leads.length > 0 ? Math.round(((performance.approved || 0) / leads.length) * 100) : 0}%
+                    {(performance.approved + performance.declined + performance.scheduled) > 0
+                      ? Math.round((performance.approved / (performance.approved + performance.declined + performance.scheduled)) * 100)
+                      : 0
+                    }%
                   </Badge>
                 </div>
               </CardContent>

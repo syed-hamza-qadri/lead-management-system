@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+/.pnp
+.pnp.js
 
 # next.js
 /.next/
@@ -15,9 +17,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
 
-# env files
-.env*
+# env files (secrets - never commit)
+.env
+.env.*
+!.env.example
 
 # vercel
 .vercel
@@ -25,3 +30,17 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# testing
+/coverage
+*.lcov
+
+# IDE / editor (project-specific, not shared)
+.cursor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# turbo (if used)
+.turbo

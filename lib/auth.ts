@@ -281,6 +281,244 @@ export async function unassignCityFromCaller(
 }
 
 /**
+ * Check if a lead was previously scheduled (Later - Unassigned)
+ * Returns true if there's a 'scheduled' action in lead_responses for this lead
+ * This persists even after the scheduled date passes and status becomes 'unassigned'
+ */
+export async function wasLeadPreviouslyScheduled(leadId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('lead_responses')
+    .select('id')
+    .eq('lead_id', leadId)
+    .in('action', ['scheduled', 'later', 'schedule'])
+    .limit(1)
+
+  if (error) return false
+  return !!data && data.length > 0
+}
+
+/**
+ * Get the display status for a lead accounting for Later - Unassigned
+ * Returns { status, wasScheduled } to help with UI rendering
+ */
+export async function getLeadDisplayStatus(leadId: string, currentStatus: string) {
+  if (currentStatus === 'unassigned') {
+    const wasScheduled = await wasLeadPreviouslyScheduled(leadId)
+    return {
+      status: currentStatus,
+      wasScheduled,
+      displayStatus: wasScheduled ? 'later-unassigned' : 'unassigned'
+    }
+  }
+  
+  return {
+    status: currentStatus,
+    wasScheduled: false,
+    displayStatus: currentStatus
+  }
+}
+
+/**
+ * Send a lead for correction (from manager or caller to lead generator)
+ * Creates a record in lead_corrections table
+ */
+export async function sendLeadForCorrection(
+  leadId: string,
+  requestedByUserId: string,
+  requestedByUserName: string,
+  requestedByRole: 'manager' | 'caller',
+  reasonNotes?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error, data } = await supabase
+      .from('lead_corrections')
+      .insert({
+        lead_id: leadId,
+        requested_by: requestedByUserId,
+        requested_by_name: requestedByUserName,
+        requested_by_role: requestedByRole,
+        reason_notes: reasonNotes || '',
+        status: 'pending'
+      })
+      .select()
+
+    if (error) {
+      return { 
+        success: false, 
+        error: `Database error: ${error.message}` 
+      }
+    }
+
+    return { success: true }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    return { 
+      success: false, 
+      error: errorMessage 
+    }
+  }
+}
+
+/**
+ * Get all pending corrections for leads created by a user (lead-generator)
+ * Used to show corrections in lead-generator portal
+ */
+export async function getPendingCorrectionsForLeadGenerator(leadGeneratorId: string) {
+  try {
+    if (!leadGeneratorId) return []
+
+    const { data, error } = await supabase
+      .from('lead_corrections')
+      .select(`
+        id,
+        lead_id,
+        requested_by,
+        requested_by_name,
+        requested_by_role,
+        reason_notes,
+        status,
+        created_at,
+        completed_at
+      `)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+
+    if (error) return []
+
+    if (!data || data.length === 0) return []
+
+    const { data: leads, error: leadsError } = await supabase
+      .from('leads')
+      .select('id, created_by')
+      .eq('created_by', leadGeneratorId)
+
+    if (leadsError) return []
+
+    if (!leads || leads.length === 0) return []
+
+    const userLeadIds = new Set(leads.map(l => l.id))
+    return data.filter(c => userLeadIds.has(c.lead_id))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Get a specific correction with its lead details
+ */
+export async function getCorrectionDetails(correctionId: string) {
+  const { data, error } = await supabase
+    .from('lead_corrections')
+    .select(`
+      *,
+      leads!inner (
+        id,
+        data,
+        niche_id,
+        city_id,
+        status,
+        follow_up_date
+      )
+    `)
+    .eq('id', correctionId)
+    .single()
+
+  if (error) return null
+  return data
+}
+
+/**
+ * Complete a correction (lead-generator confirmed changes)
+ * Marks correction as completed and resets lead to 'unassigned'
+ */
+export async function completeLeadCorrection(correctionId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Get correction details to know which lead to update
+    const correction = await getCorrectionDetails(correctionId)
+    if (!correction) {
+      return { 
+        success: false, 
+        error: 'Correction not found' 
+      }
+    }
+
+    const leadId = correction.lead_id
+
+    // Update correction status to completed
+    const { error: correctionError } = await supabase
+      .from('lead_corrections')
+      .update({
+        status: 'completed',
+        completed_at: new Date().toISOString()
+      })
+      .eq('id', correctionId)
+
+    if (correctionError) {
+      return { 
+        success: false, 
+        error: correctionError.message || 'Failed to update correction' 
+      }
+    }
+
+    // Reset lead to 'unassigned' status so it can be processed again
+    const { error: leadError } = await supabase
+      .from('leads')
+      .update({ 
+        status: 'unassigned',
+        actioned_at: null  // Clear actioned_at so it's truly fresh
+      })
+      .eq('id', leadId)
+
+    if (leadError) {
+      return { 
+        success: false, 
+        error: leadError.message || 'Failed to reset lead' 
+      }
+    }
+
+    return { success: true }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+    return { 
+      success: false, 
+      error: errorMessage 
+    }
+  }
+}
+
+/**
+ * Check if a lead has any pending corrections
+ */
+export async function hasPendingCorrection(leadId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('lead_corrections')
+    .select('id')
+    .eq('lead_id', leadId)
+    .eq('status', 'pending')
+    .limit(1)
+
+  if (error) return false
+  return !!data && data.length > 0
+}
+
+/**
+ * Get pending correction for a specific lead
+ */
+export async function getPendingCorrectionForLead(leadId: string) {
+  const { data, error } = await supabase
+    .from('lead_corrections')
+    .select('*')
+    .eq('lead_id', leadId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single()
+
+  if (error) return null
+  return data
+}
+
+/**
  * Log role access for audit
  */
 export async function logRoleAccess(

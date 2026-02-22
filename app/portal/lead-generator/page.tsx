@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
 import { useSession } from '@/lib/session'
+import { getPendingCorrectionsForLeadGenerator, completeLeadCorrection } from '@/lib/auth'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Plus, Trash2, Edit2, LogOut, BarChart3, ChevronRight, Eye, EyeOff, RefreshCw } from 'lucide-react'
+import { Loader2, Plus, Trash2, Edit2, LogOut, BarChart3, ChevronRight, Eye, EyeOff, RefreshCw, Check } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
 interface Lead {
@@ -95,6 +96,10 @@ export default function LeadGenerator() {
   // Reload loading state
   const [reloading, setReloading] = useState(false)
 
+  // Corrections state
+  const [corrections, setCorrections] = useState<any[]>([])
+  const [completingCorrectionId, setCompletingCorrectionId] = useState<string | null>(null)
+
   useEffect(() => {
     if (!sessionLoading && !session) {
       router.push('/portal')
@@ -153,6 +158,10 @@ export default function LeadGenerator() {
       setCities(citiesData || [])
       setAllLeads((leadsData || []).slice(0, 500))
 
+      // Fetch pending corrections
+      const correctionsData = await getPendingCorrectionsForLeadGenerator(userId)
+      setCorrections(correctionsData || [])
+
       // Calculate performance metrics for this lead generator based on lead.status
       let approved = 0, declined = 0, scheduled = 0, pending = 0
       
@@ -175,7 +184,7 @@ export default function LeadGenerator() {
         conversionRate
       })
     } catch (error) {
-      console.error('Error fetching data:', error)
+      console.error('[Lead-Gen] Error fetching data:', error)
       toast({
         title: 'Error',
         description: 'Failed to load data',
@@ -221,6 +230,10 @@ export default function LeadGenerator() {
         pending,
         conversionRate
       })
+
+      // Fetch corrections
+      const correctionsData = await getPendingCorrectionsForLeadGenerator(session.user_id)
+      setCorrections(correctionsData || [])
 
       toast({
         title: 'Success',
@@ -305,7 +318,7 @@ export default function LeadGenerator() {
 
       resetForm()
       setOpenDialog(false)
-      fetchData()
+      handleReloadTabs()
     } catch (error) {
       console.error('Error:', error)
       let errorMessage = 'Failed to save lead'
@@ -413,7 +426,7 @@ export default function LeadGenerator() {
       setDeleteConfirmOpen(false)
       setLeadToDelete(null)
       setDeletePassword('')
-      fetchData()
+      handleReloadTabs()
     } catch (error) {
       console.error('Error:', error)
       toast({
@@ -447,6 +460,35 @@ export default function LeadGenerator() {
         description: 'You have been logged out successfully',
       })
       router.push('/portal')
+    }
+  }
+
+  const handleCompleteCorrection = async (correctionId: string) => {
+    setCompletingCorrectionId(correctionId)
+    try {
+      const { success, error } = await completeLeadCorrection(correctionId)
+
+      if (!success) {
+        throw new Error(error || 'Failed to complete correction')
+      }
+
+      toast({
+        title: 'Success',
+        description: 'Correction marked as complete. Lead reset to unassigned status.',
+      })
+
+      // Refresh corrections and refresh tabs to show updated lead
+      setCorrections(prev => prev.filter(c => c.id !== correctionId))
+      handleReloadTabs()
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to complete correction'
+      toast({
+        title: 'Error',
+        description: errorMessage,
+        variant: 'destructive',
+      })
+    } finally {
+      setCompletingCorrectionId(null)
     }
   }
 
@@ -631,13 +673,17 @@ export default function LeadGenerator() {
 
         {/* Tabs Section */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-12">
-          <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsList className="grid w-full max-w-md grid-cols-3">
             <TabsTrigger value="unassigned" disabled={reloading} className="flex items-center gap-2">
               New Leads
               {reloading && <Loader2 className="w-4 h-4 animate-spin" />}
             </TabsTrigger>
             <TabsTrigger value="actioned" disabled={reloading} className="flex items-center gap-2">
               Actioned Leads
+              {reloading && <Loader2 className="w-4 h-4 animate-spin" />}
+            </TabsTrigger>
+            <TabsTrigger value="corrections" disabled={reloading} className="flex items-center gap-2">
+              Corrections ({corrections.length})
               {reloading && <Loader2 className="w-4 h-4 animate-spin" />}
             </TabsTrigger>
           </TabsList>
@@ -883,6 +929,116 @@ export default function LeadGenerator() {
                 )}
               </div>
             )}
+          </TabsContent>
+
+          {/* Corrections Tab */}
+          <TabsContent value="corrections" className="mt-6">
+            <Card>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="text-left px-4 py-3 font-semibold text-sm w-8">#</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Lead Name</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Requested By</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Niche</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">City</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Notes</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Date</th>
+                        <th className="text-left px-4 py-3 font-semibold text-sm">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {corrections.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="text-center py-12">
+                            <Check className="w-12 h-12 text-green-500 mx-auto mb-4" />
+                            <p className="text-muted-foreground">No pending corrections. All your leads are up to date!</p>
+                          </td>
+                        </tr>
+                      ) : (
+                        corrections.map((correction, index) => {
+                          const lead = allLeads.find(l => l.id === correction.lead_id)
+                          const niche = lead ? niches.find(n => n.id === lead.niche_id) : null
+                          const city = lead ? cities.find(c => c.id === lead.city_id) : null
+                          const correctionDate = new Date(correction.created_at).toLocaleDateString()
+                          
+                          return (
+                            <tr key={correction.id} className="border-b border-border hover:bg-muted/50 transition-colors">
+                              <td className="px-4 py-3 text-sm font-medium text-muted-foreground">{index + 1}</td>
+                              <td className="px-4 py-3 text-sm font-medium cursor-pointer text-primary hover:underline" onClick={() => {
+                                setSelectedLeadForDetails(lead)
+                                setLeadDetailsDialogOpen(true)
+                              }}>
+                                {lead?.data?.name || `Lead ${correction.lead_id.slice(0, 8)}...`}
+                              </td>
+                              <td className="px-4 py-3 text-sm">
+                                <Badge className="bg-amber-100 text-amber-700 text-xs">
+                                  {correction.requested_by_role} - {correction.requested_by_name}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-3 text-sm">{niche?.name || 'Unknown'}</td>
+                              <td className="px-4 py-3 text-sm">{city?.name || 'Unknown'}</td>
+                              <td className="px-4 py-3 text-sm text-muted-foreground line-clamp-2 max-w-xs">
+                                {correction.reason_notes || '(No notes)'}
+                              </td>
+                              <td className="px-4 py-3 text-sm whitespace-nowrap">{correctionDate}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      if (lead) {
+                                        setSelectedLeadForDetails(lead)
+                                        setEditingId(lead.id)
+                                        setIsEditing(true)
+                                        setLeadName(lead.data?.name || '')
+                                        setLeadDetails(lead.data?.details || '')
+                                        
+                                        // Set niche and city
+                                        setSelectedNiche(lead.niche_id)
+                                        setTimeout(() => {
+                                          setSelectedCity(lead.city_id)
+                                          setOpenDialog(true)
+                                        }, 0)
+                                      }
+                                    }}
+                                    className="flex items-center gap-1 text-xs h-7 px-2"
+                                    title="Edit this lead"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                    Edit
+                                  </Button>
+                                  <Button
+                                    onClick={() => handleCompleteCorrection(correction.id)}
+                                    disabled={completingCorrectionId === correction.id}
+                                    className="gap-1 bg-green-600 hover:bg-green-700 text-xs h-7 px-2"
+                                  >
+                                    {completingCorrectionId === correction.id ? (
+                                      <>
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                        Completing...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Check className="w-3 h-3" />
+                                        Done
+                                      </>
+                                    )}
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
 

@@ -10,8 +10,9 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
-import { Loader2, ArrowLeft, Mic, MicOff, Check } from 'lucide-react'
+import { Loader2, ArrowLeft, Mic, MicOff, Check, RefreshCw } from 'lucide-react'
 import { useSession } from '@/lib/session'
+import { wasLeadPreviouslyScheduled, sendLeadForCorrection } from '@/lib/auth'
 
 interface Lead {
   id: string
@@ -23,6 +24,7 @@ interface Lead {
   scheduledFor?: string
   niche_name?: string
   city_name?: string
+  wasScheduled?: boolean  // Track if lead was previously scheduled
 }
 
 interface PreviousResponse {
@@ -62,8 +64,11 @@ export default function LeadDetail() {
     notes: string
     days?: number
   } | null>(null)
+  const [correctionDialogOpen, setCorrectionDialogOpen] = useState(false)
+  const [correctionNotes, setCorrectionNotes] = useState('')
+  const [submittingCorrection, setSubmittingCorrection] = useState(false)
   const supabase = getSupabaseClient()
-  const { userId, token, loading: sessionLoading } = useSession()
+  const { userId, token, loading: sessionLoading, session } = useSession()
 
   useEffect(() => {
     const fetchLead = async () => {
@@ -79,6 +84,11 @@ export default function LeadDetail() {
         // Add niche and city names to lead object
         data.niche_name = data.niches?.name
         data.city_name = data.cities?.name
+
+        // Check if lead was previously scheduled (for Later - Unassigned display)
+        if (data.status === 'unassigned') {
+          data.wasScheduled = await wasLeadPreviouslyScheduled(leadId)
+        }
 
         // Get scheduled_for if status is scheduled
         if (data.status === 'scheduled' && data.follow_up_date) {
@@ -121,7 +131,8 @@ export default function LeadDetail() {
         }
         
         // Select action based on CURRENT LEAD STATUS only
-        // Don't select anything for unassigned leads
+        // For 'Later - Unassigned' leads (wasScheduled=true && status=unassigned), don't select any action
+        // For regular 'unassigned' leads, also don't select any action
         if (data.status === 'approved') {
           setAction('approve')
         } else if (data.status === 'declined') {
@@ -133,7 +144,7 @@ export default function LeadDetail() {
             setDaysToLater(Math.max(1, data.daysRemaining).toString())
           }
         }
-        // For 'unassigned' status or 'Later - Unassigned', don't select any action
+        // For 'unassigned' or 'Later - Unassigned', don't select any action
         
         // Fetch latest response (from ANY user) to pre-fill notes
         // NOTE: responseHistory is already fetched above with all responses ordered by actioned_at DESC
@@ -325,6 +336,72 @@ export default function LeadDetail() {
         router.back()
       }
     }, 300) // Small delay to allow dialog to close smoothly
+  }
+
+  const handleSendForCorrection = async () => {
+    if (!userId || !session?.user_name) {
+      toast({
+        title: 'Error',
+        description: 'User session not found',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    if (!correctionNotes.trim()) {
+      toast({
+        title: 'Error',
+        description: 'Please add notes explaining what needs to be corrected',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setSubmittingCorrection(true)
+    try {
+      // Determine role from path
+      const pathParts = window.location.pathname.split('/')
+      const role = pathParts[2] === 'manager' ? 'manager' : 'caller'
+
+      // Call sendLeadForCorrection from auth
+      const { success, error } = await sendLeadForCorrection(
+        leadId,
+        userId,
+        session.user_name,
+        role,
+        correctionNotes
+      )
+
+      if (!success) {
+        throw new Error(error || 'Failed to send lead for correction')
+      }
+
+      toast({
+        title: 'Success',
+        description: 'Lead sent to generator for correction',
+      })
+
+      setCorrectionDialogOpen(false)
+      setCorrectionNotes('')
+
+      // Navigate back
+      setTimeout(() => {
+        if (cityId) {
+          router.push(`/portal/city/${cityId}`)
+        } else {
+          router.back()
+        }
+      }, 300)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to send for correction'
+      toast({
+        title: 'Error',
+        description: errorMessage,
+        variant: 'destructive',
+      })
+    } finally {
+      setSubmittingCorrection(false)
+    }
   }
 
   const startVoiceRecording = () => {
@@ -627,13 +704,17 @@ export default function LeadDetail() {
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Status</p>
               <div className="flex flex-col gap-2 items-end">
                 <Badge className={`text-base px-4 py-2 font-semibold ${
+                  lead.wasScheduled && lead.status === 'unassigned' ? 'bg-purple-100 text-purple-700' :
                   lead.status === 'unassigned' ? 'bg-emerald-100 text-emerald-700' :
                   lead.status === 'approved' ? 'bg-blue-100 text-blue-700' :
                   lead.status === 'declined' ? 'bg-red-100 text-red-700' :
                   lead.status === 'scheduled' ? 'bg-yellow-100 text-yellow-700' :
                   'bg-gray-100 text-gray-700'
                 }`}>
-                  {lead.status.toUpperCase()}
+                  {lead.wasScheduled && lead.status === 'unassigned' 
+                    ? 'LATER - UNASSIGNED' 
+                    : lead.status.toUpperCase()
+                  }
                 </Badge>
                 {lead.status === 'scheduled' && lead.daysRemaining !== undefined && (
                   <p className="text-sm font-semibold text-yellow-600">
@@ -813,6 +894,16 @@ export default function LeadDetail() {
                   )}
                 </Button>
 
+                <Button
+                  onClick={() => setCorrectionDialogOpen(true)}
+                  variant="outline"
+                  className="w-full mt-2"
+                  disabled={responding || submittingCorrection}
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Send for Correction
+                </Button>
+
                 {nextLeadId && (
                   <Button
                     onClick={() => router.push(`/portal/lead/${nextLeadId}`)}
@@ -950,6 +1041,63 @@ export default function LeadDetail() {
                 className="bg-primary hover:bg-primary/90"
               >
                 Continue
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Send for Correction Dialog */}
+        <Dialog open={correctionDialogOpen} onOpenChange={setCorrectionDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Send Lead for Correction</DialogTitle>
+              <DialogDescription>
+                Request the lead generator to review and correct this lead's information
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-semibold text-foreground block mb-2">Lead: {lead?.data?.name}</label>
+                <p className="text-xs text-muted-foreground">{lead?.niche_name} - {lead?.city_name}</p>
+              </div>
+
+              <div>
+                <label htmlFor="correction-notes" className="text-sm font-semibold text-foreground block mb-2">
+                  What needs correction? *
+                </label>
+                <Textarea
+                  id="correction-notes"
+                  placeholder="Describe what information needs to be corrected or clarified..."
+                  value={correctionNotes}
+                  onChange={(e) => setCorrectionNotes(e.target.value)}
+                  className="text-sm resize-none"
+                  rows={4}
+                />
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setCorrectionDialogOpen(false)}
+                disabled={submittingCorrection}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSendForCorrection}
+                disabled={submittingCorrection || !correctionNotes.trim()}
+                className="bg-primary hover:bg-primary/90"
+              >
+                {submittingCorrection ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Sending...
+                  </>
+                ) : (
+                  'Send for Correction'
+                )}
               </Button>
             </DialogFooter>
           </DialogContent>

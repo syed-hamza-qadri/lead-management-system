@@ -11,6 +11,7 @@ import {
   assignCityToCaller,
   unassignNicheFromCaller,
   unassignCityFromCaller,
+  sendLeadForCorrection,
 } from '@/lib/auth'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -168,6 +169,12 @@ export default function ManagerPortal() {
     scheduled: 0,
     declined: 0
   })
+  
+  // Send for correction state
+  const [correctionLeadId, setCorrectionLeadId] = useState<string | null>(null)
+  const [correctionDialogOpen, setCorrectionDialogOpen] = useState(false)
+  const [correctionNotes, setCorrectionNotes] = useState('')
+  const [submittingCorrection, setSubmittingCorrection] = useState(false)
 
   useEffect(() => {
     if (!sessionLoading && !session) {
@@ -1143,6 +1150,61 @@ export default function ManagerPortal() {
         description: 'You have been logged out successfully',
       })
       router.push('/portal')
+    }
+  }
+
+  const handleSendForCorrection = async () => {
+    if (!correctionLeadId || !session?.user_id) {
+      toast({
+        title: 'Error',
+        description: 'Invalid lead or session',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    if (!correctionNotes.trim()) {
+      toast({
+        title: 'Error',
+        description: 'Please add notes explaining what needs to be corrected',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setSubmittingCorrection(true)
+    try {
+      const { success, error } = await sendLeadForCorrection(
+        correctionLeadId,
+        session.user_id,
+        session.user_name || 'Manager',
+        'manager',
+        correctionNotes
+      )
+
+      if (!success) {
+        throw new Error(error || 'Failed to send lead for correction')
+      }
+
+      toast({
+        title: 'Success',
+        description: 'Lead sent to generator for correction',
+      })
+
+      setCorrectionDialogOpen(false)
+      setCorrectionNotes('')
+      
+      // Refresh leads
+      reloadLeadsOnly()
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to send for correction'
+      toast({
+        title: 'Error',
+        description: errorMessage,
+        variant: 'destructive',
+      })
+    } finally {
+      setSubmittingCorrection(false)
     }
   }
 
@@ -3000,9 +3062,92 @@ export default function ManagerPortal() {
                       <p className="text-sm text-foreground bg-muted/50 p-3 rounded whitespace-pre-wrap">{leadResponses[selectedLeadForDetails.id].response_text}</p>
                     </div>
                   )}
+
+                  {/* Send for Correction Button */}
+                  <div className="border-t pt-4 flex gap-2">
+                    <Button
+                      onClick={() => {
+                        setCorrectionLeadId(selectedLeadForDetails.id)
+                        setCorrectionNotes('')
+                        setCorrectionDialogOpen(true)
+                        setLeadDetailsDialogOpen(false)
+                      }}
+                      variant="outline"
+                      className="w-full gap-2"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Send for Correction
+                    </Button>
+                  </div>
                 </div>
               </>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Send for Correction Dialog */}
+        <Dialog open={correctionDialogOpen} onOpenChange={setCorrectionDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Send Lead for Correction</DialogTitle>
+              <DialogDescription>
+                Request the lead generator to review and correct this lead's information
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              {selectedLeadForDetails && (
+                <div>
+                  <label className="text-sm font-semibold text-foreground block mb-2">
+                    Lead: {selectedLeadForDetails.data?.name}
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    {niches.find(n => n.id === selectedLeadForDetails.niche_id)?.name} - {cities.find(c => c.id === selectedLeadForDetails.city_id)?.name}
+                  </p>
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="correction-notes" className="text-sm font-semibold text-foreground block mb-2">
+                  What needs correction? *
+                </label>
+                <Textarea
+                  id="correction-notes"
+                  placeholder="Describe what information needs to be corrected or clarified..."
+                  value={correctionNotes}
+                  onChange={(e) => setCorrectionNotes(e.target.value)}
+                  className="text-sm resize-none"
+                  rows={4}
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setCorrectionDialogOpen(false)
+                  setLeadDetailsDialogOpen(true)
+                }}
+                disabled={submittingCorrection}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSendForCorrection}
+                disabled={submittingCorrection || !correctionNotes.trim()}
+                className="bg-primary hover:bg-primary/90"
+              >
+                {submittingCorrection ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Sending...
+                  </>
+                ) : (
+                  'Send for Correction'
+                )}
+              </Button>
+            </div>
           </DialogContent>
         </Dialog>
       </div>
