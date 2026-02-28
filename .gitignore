@@ -44,3 +44,4 @@ Thumbs.db
 
 # turbo (if used)
 .turbo
+.github/copilot-instructions.md

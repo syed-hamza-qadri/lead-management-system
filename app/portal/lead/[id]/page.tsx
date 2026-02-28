@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Loader2, ArrowLeft, Mic, MicOff, Check, RefreshCw } from 'lucide-react'
 import { useSession } from '@/lib/session'
-import { wasLeadPreviouslyScheduled, sendLeadForCorrection } from '@/lib/auth'
+import { wasLeadPreviouslyScheduled, sendLeadForCorrection, resetCorrectionStatus } from '@/lib/auth'
 
 interface Lead {
   id: string
@@ -25,6 +25,7 @@ interface Lead {
   niche_name?: string
   city_name?: string
   wasScheduled?: boolean  // Track if lead was previously scheduled
+  correction_status?: 'pending' | 'corrected' | null  // Track correction workflow status
 }
 
 interface PreviousResponse {
@@ -281,6 +282,12 @@ export default function LeadDetail() {
       if (updateError) {
         console.error('Update error:', updateError)
         throw new Error(updateError.message || 'Failed to update lead status')
+      }
+
+      // Reset correction status if this lead was corrected
+      // This clears the "Corrected" badge after caller has taken an action
+      if (lead?.correction_status === 'corrected') {
+        await resetCorrectionStatus(leadId)
       }
 
       // Log activity
@@ -716,6 +723,12 @@ export default function LeadDetail() {
                     : lead.status.toUpperCase()
                   }
                 </Badge>
+                {lead.correction_status === 'pending' && (
+                  <Badge className="bg-red-100 text-red-700 text-xs font-semibold">Wrong</Badge>
+                )}
+                {lead.correction_status === 'corrected' && (
+                  <Badge className="bg-green-100 text-green-700 text-xs font-semibold">Corrected</Badge>
+                )}
                 {lead.status === 'scheduled' && lead.daysRemaining !== undefined && (
                   <p className="text-sm font-semibold text-yellow-600">
                     ⏰ {lead.daysRemaining} days remaining

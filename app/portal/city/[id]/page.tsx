@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
 import { useToast } from '@/hooks/use-toast'
-import { wasLeadPreviouslyScheduled } from '@/lib/auth'
+import { wasLeadPreviouslyScheduled, resetCorrectionStatus, getCorrectionStatusInfo } from '@/lib/auth'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +18,8 @@ interface Lead {
   status: string
   created_at: string
   scheduled_for?: string
+  correction_status?: 'pending' | 'corrected' | null
+  corrected_at?: string
 }
 
 interface LeadWithSchedule extends Lead {
@@ -26,6 +28,7 @@ interface LeadWithSchedule extends Lead {
   wasScheduled?: boolean  // Database-backed flag for Later - Unassigned
   lastActionedAt?: string  // Track when the last action was taken
   lastAction?: string  // Track what the last action was
+  correctionInfo?: any  // Correction status info
 }
 
 export default function LeadList() {
@@ -41,7 +44,7 @@ export default function LeadList() {
   const [refreshing, setRefreshing] = useState(false)
   const [defaultTab, setDefaultTab] = useState('unassigned')
   const [performanceOpen, setPerformanceOpen] = useState(false)
-  const [performance, setPerformance] = useState({ approved: 0, declined: 0, scheduled: 0, pending: 0 })
+  const [performance, setPerformance] = useState({ approved: 0, declined: 0, scheduled: 0, pending: 0, wrong: 0, corrected: 0 })
   const supabase = getSupabaseClient()
 
   // Check for tab query parameter
@@ -71,10 +74,10 @@ export default function LeadList() {
       setCityName(cityData?.name || '')
       setNicheName(cityData?.niches?.name || '')
 
-    // Get leads for this city
+    // Get leads for this city - include correction_status and corrected_at
     const { data, error } = await supabase
       .from('leads')
-      .select('id, data, status, created_at, follow_up_date')
+      .select('id, data, status, created_at, follow_up_date, correction_status, corrected_at')
       .eq('city_id', cityId)
       .order('created_at', { ascending: false })
       .limit(100) // Add pagination
@@ -104,12 +107,15 @@ export default function LeadList() {
       }
     })
 
-    // Enrich leads using maps (no additional queries) and check for wasScheduled flag
+    // Enrich leads using maps (no additional queries) and check for wasScheduled flag + correction status
     const enrichedLeads = await Promise.all((data || []).map(async (lead: any) => {
       let daysRemaining = 0
       let wasLater = false
       let wasScheduled = false
       const actionInfo = actionMapInitial.get(lead.id)
+
+      // Get correction status info
+      const correctionInfo = await getCorrectionStatusInfo(lead.id)
 
       if (lead.status === 'scheduled' && lead.follow_up_date) {
         const scheduledDate = new Date(lead.follow_up_date)
@@ -134,7 +140,8 @@ export default function LeadList() {
             was_later: true, 
             wasScheduled: true,
             lastActionedAt: actionInfo?.actioned_at, 
-            lastAction: actionInfo?.action 
+            lastAction: actionInfo?.action,
+            correctionInfo
           }
         }
       }
@@ -150,63 +157,84 @@ export default function LeadList() {
         was_later: wasLater, 
         wasScheduled: wasScheduled,
         lastActionedAt: actionInfo?.actioned_at, 
-        lastAction: actionInfo?.action 
+        lastAction: actionInfo?.action,
+        correctionInfo
       }
     }))
 
     // Calculate performance metrics AFTER enrichment, based on CURRENT LEAD STATUS (not response action)
     // This ensures Later - Unassigned leads count as Pending when scheduled date passes
-    let approved = 0, declined = 0, scheduled = 0, pending = 0
+    let approved = 0, declined = 0, scheduled = 0, pending = 0, wrong = 0, corrected = 0
     
     enrichedLeads.forEach((lead: any) => {
       const status = lead.status
       if (status === 'approved') approved++
       else if (status === 'declined') declined++
       else if (status === 'scheduled') scheduled++
-      else if (status === 'unassigned') pending++  // Includes Later - Unassigned
+      else if (status === 'unassigned' && lead.correction_status !== 'pending') pending++  // Only count as pending if NOT a wrong lead awaiting correction
+      
+      // Count correction workflow statuses separately
+      if (lead.correction_status === 'pending') wrong++
+      else if (lead.correction_status === 'corrected') corrected++
     })
     
-    setPerformance({ approved, declined, scheduled, pending })
+    setPerformance({ approved, declined, scheduled, pending, wrong, corrected })
 
-    // Sort assigned leads: scheduled first (by days), then approved (by action time), then declined (by action time)
-    const sorted = enrichedLeads.sort((a: any, b: any) => {
-      // Leads that were previously scheduled (Later - Unassigned) come first (top of unassigned)
-      if (a.wasScheduled && !b.wasScheduled) return -1
-      if (!a.wasScheduled && b.wasScheduled) return 1
-      
-      // For assigned tab: prioritize by status
-      // 1. Scheduled leads first (by days remaining - fewest days first)
-      if (a.status === 'scheduled' && b.status !== 'scheduled') return -1
-      if (a.status !== 'scheduled' && b.status === 'scheduled') return 1
-      if (a.status === 'scheduled' && b.status === 'scheduled') {
-        return (a.daysRemaining || 999) - (b.daysRemaining || 999)
-      }
-      
-      // 2. Approved leads (by actioned_at - most recent first)
-      const aIsApproved = a.lastAction === 'approve' || a.lastAction === 'approved'
-      const bIsApproved = b.lastAction === 'approve' || b.lastAction === 'approved'
-      if (aIsApproved && !bIsApproved) return -1
-      if (!aIsApproved && bIsApproved) return 1
-      if (aIsApproved && bIsApproved) {
+    // SORTING LOGIC FOR UNASSIGNED AND ASSIGNED TABS
+    
+    // Sort for UNASSIGNED tab: Scheduled (including Later-Unassigned) → Corrected → Regular Unassigned
+    const sortUnassignedLeads = (leads: any[]) => {
+      return leads.sort((a: any, b: any) => {
+        // 1. Scheduled leads FIRST (includes Later-Unassigned: status='unassigned' + wasScheduled=true)
+        // Both true scheduled and Later-Unassigned are prioritized by days remaining
+        const aIsScheduled = a.status === 'scheduled' || (a.status === 'unassigned' && a.wasScheduled)
+        const bIsScheduled = b.status === 'scheduled' || (b.status === 'unassigned' && b.wasScheduled)
+        
+        if (aIsScheduled && !bIsScheduled) return -1
+        if (!aIsScheduled && bIsScheduled) return 1
+        if (aIsScheduled && bIsScheduled) {
+          return (a.daysRemaining || 999) - (b.daysRemaining || 999)
+        }
+        
+        // 2. Corrected leads (by corrected_at - most recent first)
+        if (a.correction_status === 'corrected' && b.correction_status !== 'corrected') return -1
+        if (a.correction_status !== 'corrected' && b.correction_status === 'corrected') return 1
+        if (a.correction_status === 'corrected' && b.correction_status === 'corrected') {
+          const aTime = a.corrected_at ? new Date(a.corrected_at).getTime() : 0
+          const bTime = b.corrected_at ? new Date(b.corrected_at).getTime() : 0
+          return bTime - aTime  // Most recent first
+        }
+        
+        // 3. Regular Unassigned leads (never scheduled - by creation date - newest first)
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      })
+    }
+
+    // Sort for ASSIGNED tab: by action time (latest first)
+    const sortAssignedLeads = (leads: any[]) => {
+      return leads.sort((a: any, b: any) => {
+        // Sort all assigned leads by their most recent action (latest first)
         const aTime = a.lastActionedAt ? new Date(a.lastActionedAt).getTime() : 0
         const bTime = b.lastActionedAt ? new Date(b.lastActionedAt).getTime() : 0
-        return bTime - aTime  // Most recent first
-      }
-      
-      // 3. Declined leads (by actioned_at - most recent first)
-      const aIsDeclined = a.lastAction === 'decline' || a.lastAction === 'declined'
-      const bIsDeclined = b.lastAction === 'decline' || b.lastAction === 'declined'
-      if (aIsDeclined && !bIsDeclined) return -1
-      if (!aIsDeclined && bIsDeclined) return 1
-      if (aIsDeclined && bIsDeclined) {
-        const aTime = a.lastActionedAt ? new Date(a.lastActionedAt).getTime() : 0
-        const bTime = b.lastActionedAt ? new Date(b.lastActionedAt).getTime() : 0
-        return bTime - aTime  // Most recent first
-      }
-      
-      // Fallback: by creation date (newest first)
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    })
+        
+        if (aTime !== bTime) {
+          return bTime - aTime  // Most recent first
+        }
+        
+        // Fallback: by creation date (newest first)
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      })
+    }
+
+    // Apply sorting to unassigned and assigned leads separately
+    const unassignedLeads = enrichedLeads.filter(l => l.status === 'unassigned' && l.correction_status !== 'pending')
+    const assignedLeads = enrichedLeads.filter(l => l.status !== 'unassigned' || l.correction_status === 'pending')
+    
+    const sortedUnassigned = sortUnassignedLeads(unassignedLeads)
+    const sortedAssigned = sortAssignedLeads(assignedLeads)
+    
+    // Combine both sorted arrays
+    const sorted = [...sortedUnassigned, ...sortedAssigned]
 
     setLeads(sorted)
 
@@ -235,7 +263,15 @@ export default function LeadList() {
     }
   }, [cityId, supabase])
 
-  const getStatusColor = (status: string, wasScheduled?: boolean) => {
+  const getStatusColor = (status: string, wasScheduled?: boolean, correctionStatus?: string | null) => {
+    // Correction status takes priority for badge color
+    if (correctionStatus === 'pending') {
+      return 'bg-red-100 text-red-700 border-red-200'  // Red for "Wrong"
+    }
+    if (correctionStatus === 'corrected') {
+      return 'bg-green-100 text-green-700 border-green-200'  // Green for "Corrected"
+    }
+    
     if (wasScheduled && status === 'unassigned') {
       return 'bg-purple-100 text-purple-700 border-purple-200'  // Purple for "Later - Unassigned"
     }
@@ -248,8 +284,11 @@ export default function LeadList() {
     return colors[status] || 'bg-gray-100 text-gray-800'
   }
 
-  const unassignedLeads = leads.filter(l => l.status === 'unassigned')
-  const assignedLeads = leads.filter(l => l.status !== 'unassigned')
+  // Categorize leads by correction status and lead status
+  // Pending corrections go to "assigned" tab with "Wrong" badge
+  // Corrected leads stay in "unassigned" tab with "Corrected" badge
+  const unassignedLeads = leads.filter(l => l.status === 'unassigned' && l.correction_status !== 'pending')
+  const assignedLeads = leads.filter(l => l.status !== 'unassigned' || l.correction_status === 'pending')
 
   const LeadCard = ({ lead }: { lead: LeadWithSchedule }) => {
     // Parse and display lead details
@@ -302,9 +341,13 @@ export default function LeadList() {
               </div>
               <Badge 
                 variant="outline" 
-                className={`text-xs px-2 py-1 font-semibold whitespace-nowrap border ${getStatusColor(lead.status, lead.wasScheduled)}`}
+                className={`text-xs px-2 py-1 font-semibold whitespace-nowrap border ${getStatusColor(lead.status, lead.wasScheduled, lead.correction_status)}`}
               >
-                {lead.wasScheduled && lead.status === 'unassigned' 
+                {lead.correction_status === 'pending' 
+                  ? 'Wrong' 
+                  : lead.correction_status === 'corrected'
+                  ? 'Corrected'
+                  : lead.wasScheduled && lead.status === 'unassigned' 
                   ? 'Later - Unassigned' 
                   : lead.status.charAt(0).toUpperCase() + lead.status.slice(1)
                 }
@@ -415,6 +458,17 @@ export default function LeadList() {
                 <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Pending:</span>
                   <Badge className="bg-yellow-100 text-yellow-700">{performance.pending || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t border-border">
+                  <span className="font-semibold">Correction Status:</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Wrong:</span>
+                  <Badge className="bg-red-100 text-red-700">{performance.wrong || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Corrected:</span>
+                  <Badge className="bg-green-100 text-green-700">{performance.corrected || 0}</Badge>
                 </div>
                 <div className="flex justify-between items-center pt-2 border-t border-border">
                   <span className="font-semibold">Conversion Rate:</span>

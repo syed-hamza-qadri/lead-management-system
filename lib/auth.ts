@@ -320,7 +320,7 @@ export async function getLeadDisplayStatus(leadId: string, currentStatus: string
 
 /**
  * Send a lead for correction (from manager or caller to lead generator)
- * Creates a record in lead_corrections table
+ * Creates a record in lead_corrections table and updates lead status
  */
 export async function sendLeadForCorrection(
   leadId: string,
@@ -330,7 +330,8 @@ export async function sendLeadForCorrection(
   reasonNotes?: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const { error, data } = await supabase
+    // Create correction request
+    const { error: correctionError, data } = await supabase
       .from('lead_corrections')
       .insert({
         lead_id: leadId,
@@ -342,10 +343,25 @@ export async function sendLeadForCorrection(
       })
       .select()
 
-    if (error) {
+    if (correctionError) {
       return { 
         success: false, 
-        error: `Database error: ${error.message}` 
+        error: `Database error: ${correctionError.message}` 
+      }
+    }
+
+    // Update lead to mark as pending correction
+    const { error: leadError } = await supabase
+      .from('leads')
+      .update({
+        correction_status: 'pending'
+      })
+      .eq('id', leadId)
+
+    if (leadError) {
+      return {
+        success: false,
+        error: `Failed to update lead status: ${leadError.message}`
       }
     }
 
@@ -429,7 +445,7 @@ export async function getCorrectionDetails(correctionId: string) {
 
 /**
  * Complete a correction (lead-generator confirmed changes)
- * Marks correction as completed and resets lead to 'unassigned'
+ * Marks correction as completed and updates lead with corrected status
  */
 export async function completeLeadCorrection(correctionId: string): Promise<{ success: boolean; error?: string }> {
   try {
@@ -443,13 +459,14 @@ export async function completeLeadCorrection(correctionId: string): Promise<{ su
     }
 
     const leadId = correction.lead_id
+    const now = new Date().toISOString()
 
     // Update correction status to completed
     const { error: correctionError } = await supabase
       .from('lead_corrections')
       .update({
         status: 'completed',
-        completed_at: new Date().toISOString()
+        completed_at: now
       })
       .eq('id', correctionId)
 
@@ -460,19 +477,21 @@ export async function completeLeadCorrection(correctionId: string): Promise<{ su
       }
     }
 
-    // Reset lead to 'unassigned' status so it can be processed again
+    // Update lead: reset to unassigned with corrected status badge
     const { error: leadError } = await supabase
       .from('leads')
       .update({ 
         status: 'unassigned',
-        actioned_at: null  // Clear actioned_at so it's truly fresh
+        correction_status: 'corrected',  // Mark as corrected (for badge display)
+        corrected_at: now,               // Timestamp for tracking
+        actioned_at: null                // Clear actioned_at so it's truly fresh
       })
       .eq('id', leadId)
 
     if (leadError) {
       return { 
         success: false, 
-        error: leadError.message || 'Failed to reset lead' 
+        error: leadError.message || 'Failed to update lead' 
       }
     }
 
@@ -516,6 +535,102 @@ export async function getPendingCorrectionForLead(leadId: string) {
 
   if (error) return null
   return data
+}
+
+/**
+ * Get correction status information for a lead
+ * Returns badge type and message for UI display
+ */
+export async function getCorrectionStatusInfo(leadId: string): Promise<{
+  hasCorrection: boolean
+  status: 'pending' | 'corrected' | null
+  badge: 'wrong' | 'corrected' | null
+  message: string
+  pendingCorrection?: any
+}> {
+  try {
+    // Get lead correction status
+    const { data: lead, error: leadError } = await supabase
+      .from('leads')
+      .select('correction_status, corrected_at')
+      .eq('id', leadId)
+      .single()
+
+    if (leadError || !lead) {
+      return {
+        hasCorrection: false,
+        status: null,
+        badge: null,
+        message: 'No correction info'
+      }
+    }
+
+    // If no correction status, return normal
+    if (!lead.correction_status) {
+      return {
+        hasCorrection: false,
+        status: null,
+        badge: null,
+        message: 'Normal lead'
+      }
+    }
+
+    // If pending correction, get the correction details
+    if (lead.correction_status === 'pending') {
+      const pendingCorrection = await getPendingCorrectionForLead(leadId)
+      return {
+        hasCorrection: true,
+        status: 'pending',
+        badge: 'wrong',
+        message: `Sent for correction: ${pendingCorrection?.reason_notes || 'No details provided'}`,
+        pendingCorrection
+      }
+    }
+
+    // If corrected
+    if (lead.correction_status === 'corrected') {
+      return {
+        hasCorrection: true,
+        status: 'corrected',
+        badge: 'corrected',
+        message: `Corrected on ${new Date(lead.corrected_at).toLocaleDateString()}`
+      }
+    }
+
+    return {
+      hasCorrection: false,
+      status: null,
+      badge: null,
+      message: 'Unknown status'
+    }
+  } catch {
+    return {
+      hasCorrection: false,
+      status: null,
+      badge: null,
+      message: 'Error checking status'
+    }
+  }
+}
+
+/**
+ * Reset correction status for a lead (after caller has processed corrected lead)
+ * Called when caller takes action on a corrected lead
+ */
+export async function resetCorrectionStatus(leadId: string): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('leads')
+      .update({
+        correction_status: null,
+        corrected_at: null
+      })
+      .eq('id', leadId)
+
+    return !error
+  } catch {
+    return false
+  }
 }
 
 /**
