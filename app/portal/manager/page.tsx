@@ -58,6 +58,8 @@ interface Lead {
   status?: string
   follow_up_date?: string | null
   creator?: { id: string; name: string }
+  correction_status?: 'pending' | 'corrected' | null
+  corrected_at?: string
 }
 
 interface LeadResponse {
@@ -70,6 +72,8 @@ interface CallerPerformance {
   declined: number
   scheduled: number
   pending: number
+  wrong: number
+  corrected: number
 }
 
 interface LeadGeneratorPerformance {
@@ -78,6 +82,8 @@ interface LeadGeneratorPerformance {
   declined: number
   scheduled: number
   pending: number
+  wrong: number
+  corrected: number
   conversionRate: number
 }
 
@@ -170,11 +176,18 @@ export default function ManagerPortal() {
     declined: 0
   })
   
+  // Correction metrics
+  const [correctionMetrics, setCorrectionMetrics] = useState({
+    pendingCorrection: 0,
+    completedCorrection: 0
+  })
+  
   // Send for correction state
   const [correctionLeadId, setCorrectionLeadId] = useState<string | null>(null)
   const [correctionDialogOpen, setCorrectionDialogOpen] = useState(false)
   const [correctionNotes, setCorrectionNotes] = useState('')
   const [submittingCorrection, setSubmittingCorrection] = useState(false)
+  const [existingCorrectionMessage, setExistingCorrectionMessage] = useState<string | null>(null)
 
   useEffect(() => {
     if (!sessionLoading && !session) {
@@ -295,13 +308,24 @@ export default function ManagerPortal() {
         scheduled: 0,
         declined: 0
       }
+      let pendingCorrection = 0
+      let completedCorrection = 0
+      
       ;(leadsData || []).forEach((lead: any) => {
         if (lead.status === 'unassigned') metrics.pending++
         else if (lead.status === 'approved') metrics.approved++
         else if (lead.status === 'scheduled') metrics.scheduled++
         else if (lead.status === 'declined') metrics.declined++
+        
+        // Count correction metrics
+        if (lead.correction_status === 'pending') pendingCorrection++
+        else if (lead.correction_status === 'corrected') completedCorrection++
       })
       setLeadStatusMetrics(metrics)
+      setCorrectionMetrics({
+        pendingCorrection,
+        completedCorrection
+      })
 
       // Fetch all assignments in batch (not per-caller)
       const { data: allNicheAssignments } = await supabase
@@ -361,13 +385,22 @@ export default function ManagerPortal() {
         const assignedCityIds = callerCities.map(c => c.id)
         
         const leadsInCities = (leadsData || []).filter((l: any) => assignedCityIds.includes(l.city_id))
-        let approved = 0, declined = 0, scheduled = 0, pending = 0
+        let approved = 0, declined = 0, scheduled = 0, pending = 0, wrong = 0, corrected = 0
 
         leadsInCities.forEach((lead: any) => {
-          if (lead.status === 'approved') approved++
-          else if (lead.status === 'declined') declined++
-          else if (lead.status === 'scheduled') scheduled++
-          else if (lead.status === 'unassigned') pending++
+          if (lead.correction_status === 'pending') {
+            wrong++
+          } else if (lead.correction_status === 'corrected') {
+            corrected++
+          } else if (lead.status === 'approved') {
+            approved++
+          } else if (lead.status === 'declined') {
+            declined++
+          } else if (lead.status === 'scheduled') {
+            scheduled++
+          } else if (lead.status === 'unassigned') {
+            pending++
+          }
         })
 
         performanceData.set(caller.id, {
@@ -375,7 +408,9 @@ export default function ManagerPortal() {
           approved,
           declined,
           scheduled,
-          pending
+          pending,
+          wrong,
+          corrected
         })
 
         setCallerNiches(prev => ({
@@ -413,13 +448,22 @@ export default function ManagerPortal() {
 
       allGenerators.forEach((generatorId: string) => {
         const generatorLeads = (leadsData || []).filter((l: any) => l.created_by === generatorId)
-        let approved = 0, declined = 0, scheduled = 0, pending = 0
+        let approved = 0, declined = 0, scheduled = 0, pending = 0, wrong = 0, corrected = 0
         
         generatorLeads.forEach((lead: any) => {
-          if (lead.status === 'approved') approved++
-          else if (lead.status === 'declined') declined++
-          else if (lead.status === 'scheduled') scheduled++
-          else if (lead.status === 'unassigned') pending++
+          if (lead.correction_status === 'pending') {
+            wrong++
+          } else if (lead.correction_status === 'corrected') {
+            corrected++
+          } else if (lead.status === 'approved') {
+            approved++
+          } else if (lead.status === 'declined') {
+            declined++
+          } else if (lead.status === 'scheduled') {
+            scheduled++
+          } else if (lead.status === 'unassigned') {
+            pending++
+          }
         })
 
         const total = approved + declined + scheduled
@@ -431,6 +475,8 @@ export default function ManagerPortal() {
           declined,
           scheduled,
           pending,
+          wrong,
+          corrected,
           conversionRate
         })
       })
@@ -529,13 +575,24 @@ export default function ManagerPortal() {
         scheduled: 0,
         declined: 0
       }
+      let pendingCorrection = 0
+      let completedCorrection = 0
+      
       ;(leadsData || []).forEach((lead: any) => {
         if (lead.status === 'unassigned') metrics.pending++
         else if (lead.status === 'approved') metrics.approved++
         else if (lead.status === 'scheduled') metrics.scheduled++
         else if (lead.status === 'declined') metrics.declined++
+        
+        // Count correction metrics
+        if (lead.correction_status === 'pending') pendingCorrection++
+        else if (lead.correction_status === 'corrected') completedCorrection++
       })
       setLeadStatusMetrics(metrics)
+      setCorrectionMetrics({
+        pendingCorrection,
+        completedCorrection
+      })
 
       toast({
         title: 'Success',
@@ -795,12 +852,23 @@ export default function ManagerPortal() {
         let declined = 0
         let scheduled = 0
         let pending = 0
+        let wrong = 0
+        let corrected = 0
 
         ;(leadsInAssignedCities || []).forEach((lead: any) => {
-          if (lead.status === 'approved') approved++
-          else if (lead.status === 'declined') declined++
-          else if (lead.status === 'scheduled') scheduled++
-          else if (lead.status === 'unassigned') pending++
+          if (lead.correction_status === 'pending') {
+            wrong++
+          } else if (lead.correction_status === 'corrected') {
+            corrected++
+          } else if (lead.status === 'approved') {
+            approved++
+          } else if (lead.status === 'declined') {
+            declined++
+          } else if (lead.status === 'scheduled') {
+            scheduled++
+          } else if (lead.status === 'unassigned') {
+            pending++
+          }
         })
 
         setCallerPerformance(prev => ({
@@ -810,7 +878,9 @@ export default function ManagerPortal() {
             approved,
             declined,
             scheduled,
-            pending
+            pending,
+            wrong,
+            corrected
           }
         }))
       }
@@ -876,13 +946,22 @@ export default function ManagerPortal() {
 
         allGeneratorsSet.forEach((generatorId: string) => {
           const generatorLeads = (freshLeads || []).filter((l: any) => l.created_by === generatorId)
-          let approved = 0, declined = 0, scheduled = 0, pending = 0
+          let approved = 0, declined = 0, scheduled = 0, pending = 0, wrong = 0, corrected = 0
           
           generatorLeads.forEach((lead: any) => {
-            if (lead.status === 'approved') approved++
-            else if (lead.status === 'declined') declined++
-            else if (lead.status === 'scheduled') scheduled++
-            else if (lead.status === 'unassigned') pending++
+            if (lead.correction_status === 'pending') {
+              wrong++
+            } else if (lead.correction_status === 'corrected') {
+              corrected++
+            } else if (lead.status === 'approved') {
+              approved++
+            } else if (lead.status === 'declined') {
+              declined++
+            } else if (lead.status === 'scheduled') {
+              scheduled++
+            } else if (lead.status === 'unassigned') {
+              pending++
+            }
           })
 
           const total = approved + declined + scheduled
@@ -894,6 +973,8 @@ export default function ManagerPortal() {
             declined,
             scheduled,
             pending,
+            wrong,
+            corrected,
             conversionRate
           })
         })
@@ -1153,6 +1234,36 @@ export default function ManagerPortal() {
     }
   }
 
+  // Fetch existing correction message when correction dialog opens
+  useEffect(() => {
+    if (correctionDialogOpen && correctionLeadId) {
+      const fetchExistingCorrection = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('lead_corrections')
+            .select('reason_notes')
+            .eq('lead_id', correctionLeadId)
+            .eq('status', 'pending')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single()
+
+          if (!error && data) {
+            setExistingCorrectionMessage(data.reason_notes)
+            // Pre-fill the textarea with existing message so user can edit it
+            if (!correctionNotes) {
+              setCorrectionNotes(data.reason_notes)
+            }
+          }
+        } catch (err) {
+          // No existing correction, that's fine
+          setExistingCorrectionMessage(null)
+        }
+      }
+      fetchExistingCorrection()
+    }
+  }, [correctionDialogOpen, correctionLeadId, supabase])
+
   const handleSendForCorrection = async () => {
     if (!correctionLeadId || !session?.user_id) {
       toast({
@@ -1174,7 +1285,7 @@ export default function ManagerPortal() {
 
     setSubmittingCorrection(true)
     try {
-      const { success, error } = await sendLeadForCorrection(
+      const { success, error, isUpdate } = await sendLeadForCorrection(
         correctionLeadId,
         session.user_id,
         session.user_name || 'Manager',
@@ -1188,7 +1299,9 @@ export default function ManagerPortal() {
 
       toast({
         title: 'Success',
-        description: 'Lead sent to generator for correction',
+        description: isUpdate 
+          ? 'Correction message updated. Lead generator will see the latest notes.'
+          : 'Lead sent to generator for correction',
       })
 
       setCorrectionDialogOpen(false)
@@ -1330,6 +1443,26 @@ export default function ManagerPortal() {
           </Card>
         </div>
 
+        {/* Correction Status Summary Cards - 2 Correction Metrics */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-3 mb-6 mx-auto w-full lg:w-2/5">
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Pending Corrections</p>
+              <p className="text-2xl font-bold text-primary">
+                {correctionMetrics.pendingCorrection}
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white border border-border shadow-sm hover:shadow-md transition-shadow">
+            <CardContent className="pt-3 pb-3 px-4 text-center">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Completed Corrections</p>
+              <p className="text-2xl font-bold text-primary">
+                {correctionMetrics.completedCorrection}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
         {/* Tabs Container */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid w-full grid-cols-4">
@@ -1390,7 +1523,7 @@ export default function ManagerPortal() {
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {callers.map(caller => {
-                      const performance = callerPerformance[caller.id] || { assigned: 0, approved: 0, declined: 0, scheduled: 0, pending: 0 }
+                      const performance = callerPerformance[caller.id] || { assigned: 0, approved: 0, declined: 0, scheduled: 0, pending: 0, wrong: 0, corrected: 0 }
                       const nicheCount = (callerNiches[caller.id] || []).length
                       const cityCount = (callerCities[caller.id] || []).length
                       const total = performance.approved + performance.declined + performance.scheduled
@@ -1432,6 +1565,17 @@ export default function ManagerPortal() {
                             <div className="flex justify-between items-center pt-2 border-t border-border">
                               <span className="font-semibold">Conversion Rate:</span>
                               <Badge className="bg-gray-100 text-gray-900">{conversionRate}%</Badge>
+                            </div>
+                            <div className="flex justify-between items-center pt-2 border-t border-border">
+                              <span className="font-semibold">Correction Status:</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Wrong:</span>
+                              <Badge className="bg-red-100 text-red-700">{performance.wrong || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Corrected:</span>
+                              <Badge className="bg-green-100 text-green-700">{performance.corrected || 0}</Badge>
                             </div>
                           </CardContent>
                         </Card>
@@ -1484,6 +1628,17 @@ export default function ManagerPortal() {
                             <div className="flex justify-between items-center pt-2 border-t border-border">
                               <span className="font-semibold">Conversion Rate:</span>
                               <Badge className="bg-gray-100 text-gray-900">{performance.conversionRate}%</Badge>
+                            </div>
+                            <div className="flex justify-between items-center pt-2 border-t border-border">
+                              <span className="font-semibold">Correction Status:</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Wrong:</span>
+                              <Badge className="bg-red-100 text-red-700">{performance.wrong || 0}</Badge>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-muted-foreground">Corrected:</span>
+                              <Badge className="bg-green-100 text-green-700">{performance.corrected || 0}</Badge>
                             </div>
                           </CardContent>
                         </Card>
@@ -3107,9 +3262,22 @@ export default function ManagerPortal() {
                 </div>
               )}
 
+              {existingCorrectionMessage && (
+                <div className="bg-amber-50 border border-amber-200 rounded p-3">
+                  <p className="text-xs font-semibold text-amber-900 mb-2">
+                    ⚠️ This lead is already awaiting correction
+                  </p>
+                  <p className="text-xs text-amber-800 mb-2">Current message:</p>
+                  <p className="text-xs text-amber-700 bg-white p-2 rounded border border-amber-100 italic">
+                    "{existingCorrectionMessage}"
+                  </p>
+                  <p className="text-xs text-amber-700 mt-2">Update the message below to send new instructions to the lead generator:</p>
+                </div>
+              )}
+
               <div>
                 <label htmlFor="correction-notes" className="text-sm font-semibold text-foreground block mb-2">
-                  What needs correction? *
+                  {existingCorrectionMessage ? 'Updated notes (will replace previous message):' : 'What needs correction?'} *
                 </label>
                 <Textarea
                   id="correction-notes"
@@ -3128,6 +3296,8 @@ export default function ManagerPortal() {
                 onClick={() => {
                   setCorrectionDialogOpen(false)
                   setLeadDetailsDialogOpen(true)
+                  setExistingCorrectionMessage(null)
+                  setCorrectionNotes('')
                 }}
                 disabled={submittingCorrection}
               >
@@ -3141,10 +3311,10 @@ export default function ManagerPortal() {
                 {submittingCorrection ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Sending...
+                    {existingCorrectionMessage ? 'Updating...' : 'Sending...'}
                   </>
                 ) : (
-                  'Send for Correction'
+                  existingCorrectionMessage ? 'Update Message' : 'Send for Correction'
                 )}
               </Button>
             </div>

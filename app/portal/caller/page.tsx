@@ -23,6 +23,8 @@ interface Lead {
   status: string
   assigned_to: string
   created_at: string
+  correction_status?: 'pending' | 'corrected' | null
+  corrected_at?: string
 }
 
 interface NicheData {
@@ -66,6 +68,8 @@ export default function CallerPortal() {
     declined: 0, 
     scheduled: 0, 
     pending: 0,
+    wrong: 0,
+    corrected: 0,
     conversionRate: 0
   })
 
@@ -134,14 +138,18 @@ export default function CallerPortal() {
       
       // Calculate performance metrics based on current lead status (not just caller's actions)
       // This ensures we show metrics updated by any user (including managers)
-      let approved = 0, declined = 0, scheduled = 0, pending = 0
+      let approved = 0, declined = 0, scheduled = 0, pending = 0, wrong = 0, corrected = 0
       
       leadsData.forEach((lead: any) => {
         const status = lead.status
         if (status === 'approved') approved++
         else if (status === 'declined') declined++
         else if (status === 'scheduled') scheduled++
-        else if (status === 'unassigned') pending++
+        else if (status === 'unassigned' && lead.correction_status !== 'pending') pending++  // Only count as pending if NOT awaiting correction
+        
+        // Count correction workflow statuses separately
+        if (lead.correction_status === 'pending') wrong++
+        else if (lead.correction_status === 'corrected') corrected++
       })
       
       const total = approved + declined + scheduled
@@ -155,6 +163,8 @@ export default function CallerPortal() {
         declined,
         scheduled,
         pending,
+        wrong,
+        corrected,
         conversionRate
       })
 
@@ -438,6 +448,17 @@ export default function CallerPortal() {
                 <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Pending:</span>
                   <Badge className="bg-yellow-100 text-yellow-700">{performance.pending || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t border-border">
+                  <span className="font-semibold">Correction Status:</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Wrong:</span>
+                  <Badge className="bg-red-100 text-red-700">{performance.wrong || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Corrected:</span>
+                  <Badge className="bg-green-100 text-green-700">{performance.corrected || 0}</Badge>
                 </div>
                 <div className="flex justify-between items-center pt-2 border-t border-border">
                   <span className="font-semibold">Conversion Rate:</span>

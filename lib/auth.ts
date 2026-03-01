@@ -328,9 +328,55 @@ export async function sendLeadForCorrection(
   requestedByUserName: string,
   requestedByRole: 'manager' | 'caller',
   reasonNotes?: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ 
+  success: boolean
+  error?: string
+  existingCorrection?: any
+  isUpdate?: boolean
+}> {
   try {
-    // Create correction request
+    // Check if there's already a pending correction for this lead
+    const { data: existingCorrection, error: checkError } = await supabase
+      .from('lead_corrections')
+      .select('*')
+      .eq('lead_id', leadId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
+
+    // If pending correction already exists, allow update instead of creating duplicate
+    if (existingCorrection && !checkError) {
+      // Update existing correction with new message
+      const { error: updateError } = await supabase
+        .from('lead_corrections')
+        .update({
+          reason_notes: reasonNotes || existingCorrection.reason_notes,
+          requested_by: requestedByUserId,
+          requested_by_name: requestedByUserName,
+          requested_by_role: requestedByRole,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existingCorrection.id)
+
+      if (updateError) {
+        return { 
+          success: false, 
+          error: `Failed to update correction: ${updateError.message}` 
+        }
+      }
+
+      return { 
+        success: true, 
+        existingCorrection: {
+          ...existingCorrection,
+          reason_notes: reasonNotes || existingCorrection.reason_notes
+        },
+        isUpdate: true
+      }
+    }
+
+    // No existing pending correction, create new one
     const { error: correctionError, data } = await supabase
       .from('lead_corrections')
       .insert({

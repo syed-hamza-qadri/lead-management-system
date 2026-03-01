@@ -28,10 +28,17 @@ CREATE INDEX IF NOT EXISTS idx_leads_correction_corrected ON leads(correction_st
 WHERE correction_status = 'corrected';
 
 -- ============================================================================
--- 3. Add comment explaining the columns
+-- 3. Add updated_at column to lead_corrections table for tracking updates
+-- ============================================================================
+ALTER TABLE lead_corrections
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NULL;
+
+-- ============================================================================
+-- 4. Add comment explaining the column
 -- ============================================================================
 COMMENT ON COLUMN leads.correction_status IS 'Status in correction workflow: pending (sent for correction), corrected (correction completed), NULL (normal)';
 COMMENT ON COLUMN leads.corrected_at IS 'Timestamp when correction was completed by lead generator';
+COMMENT ON COLUMN lead_corrections.updated_at IS 'Timestamp when correction message was last updated by caller/manager';
 
 -- ============================================================================
 -- END OF MIGRATION

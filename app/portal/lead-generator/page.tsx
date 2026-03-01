@@ -25,6 +25,8 @@ interface Lead {
   status: string
   created_at: string
   created_by?: string
+  correction_status?: 'pending' | 'corrected' | null
+  corrected_at?: string
 }
 
 interface Niche {
@@ -71,6 +73,8 @@ export default function LeadGenerator() {
     declined: 0, 
     scheduled: 0, 
     pending: 0,
+    wrong: 0,
+    corrected: 0,
     conversionRate: 0
   })
   
@@ -163,13 +167,22 @@ export default function LeadGenerator() {
       setCorrections(correctionsData || [])
 
       // Calculate performance metrics for this lead generator based on lead.status
-      let approved = 0, declined = 0, scheduled = 0, pending = 0
+      let approved = 0, declined = 0, scheduled = 0, pending = 0, wrong = 0, corrected = 0
       
       ;(leadsData || []).forEach((lead: any) => {
-        if (lead.status === 'approved') approved++
-        else if (lead.status === 'declined') declined++
-        else if (lead.status === 'scheduled') scheduled++
-        else if (lead.status === 'unassigned') pending++
+        if (lead.correction_status === 'pending') {
+          wrong++
+        } else if (lead.correction_status === 'corrected') {
+          corrected++
+        } else if (lead.status === 'approved') {
+          approved++
+        } else if (lead.status === 'declined') {
+          declined++
+        } else if (lead.status === 'scheduled') {
+          scheduled++
+        } else if (lead.status === 'unassigned') {
+          pending++
+        }
       })
       
       const total = approved + declined + scheduled
@@ -181,6 +194,8 @@ export default function LeadGenerator() {
         declined,
         scheduled,
         pending,
+        wrong,
+        corrected,
         conversionRate
       })
     } catch (error) {
@@ -210,13 +225,22 @@ export default function LeadGenerator() {
       setAllLeads((leadsData || []).slice(0, 500))
 
       // Calculate performance metrics for this lead generator based on lead.status
-      let approved = 0, declined = 0, scheduled = 0, pending = 0
+      let approved = 0, declined = 0, scheduled = 0, pending = 0, wrong = 0, corrected = 0
       
       ;(leadsData || []).forEach((lead: any) => {
-        if (lead.status === 'approved') approved++
-        else if (lead.status === 'declined') declined++
-        else if (lead.status === 'scheduled') scheduled++
-        else if (lead.status === 'unassigned') pending++
+        if (lead.correction_status === 'pending') {
+          wrong++
+        } else if (lead.correction_status === 'corrected') {
+          corrected++
+        } else if (lead.status === 'approved') {
+          approved++
+        } else if (lead.status === 'declined') {
+          declined++
+        } else if (lead.status === 'scheduled') {
+          scheduled++
+        } else if (lead.status === 'unassigned') {
+          pending++
+        }
       })
       
       const total = approved + declined + scheduled
@@ -228,6 +252,8 @@ export default function LeadGenerator() {
         declined,
         scheduled,
         pending,
+        wrong,
+        corrected,
         conversionRate
       })
 
@@ -665,6 +691,17 @@ export default function LeadGenerator() {
                 <div className="flex justify-between items-center pt-2 border-t border-border">
                   <span className="font-semibold">Conversion Rate:</span>
                   <Badge className="bg-gray-100 text-gray-900">{performance.conversionRate}%</Badge>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t border-border">
+                  <span className="font-semibold">Correction Status:</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Wrong:</span>
+                  <Badge className="bg-red-100 text-red-700">{performance.wrong || 0}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Corrected:</span>
+                  <Badge className="bg-green-100 text-green-700">{performance.corrected || 0}</Badge>
                 </div>
               </CardContent>
             </Card>

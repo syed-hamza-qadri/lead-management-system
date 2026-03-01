@@ -68,6 +68,7 @@ export default function LeadDetail() {
   const [correctionDialogOpen, setCorrectionDialogOpen] = useState(false)
   const [correctionNotes, setCorrectionNotes] = useState('')
   const [submittingCorrection, setSubmittingCorrection] = useState(false)
+  const [existingCorrectionMessage, setExistingCorrectionMessage] = useState<string | null>(null)
   const supabase = getSupabaseClient()
   const { userId, token, loading: sessionLoading, session } = useSession()
 
@@ -193,6 +194,36 @@ export default function LeadDetail() {
       fetchLead()
     }
   }, [leadId, supabase, userId])
+
+  // Fetch existing correction message when correction dialog opens
+  useEffect(() => {
+    if (correctionDialogOpen && leadId) {
+      const fetchExistingCorrection = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('lead_corrections')
+            .select('reason_notes')
+            .eq('lead_id', leadId)
+            .eq('status', 'pending')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single()
+
+          if (!error && data) {
+            setExistingCorrectionMessage(data.reason_notes)
+            // Pre-fill the textarea with existing message so user can edit it
+            if (!correctionNotes) {
+              setCorrectionNotes(data.reason_notes)
+            }
+          }
+        } catch (err) {
+          // No existing correction, that's fine
+          setExistingCorrectionMessage(null)
+        }
+      }
+      fetchExistingCorrection()
+    }
+  }, [correctionDialogOpen, leadId, supabase])
 
   const handleAction = async () => {
     if (!userId) {
@@ -371,7 +402,7 @@ export default function LeadDetail() {
       const role = pathParts[2] === 'manager' ? 'manager' : 'caller'
 
       // Call sendLeadForCorrection from auth
-      const { success, error } = await sendLeadForCorrection(
+      const { success, error, isUpdate } = await sendLeadForCorrection(
         leadId,
         userId,
         session.user_name,
@@ -385,7 +416,9 @@ export default function LeadDetail() {
 
       toast({
         title: 'Success',
-        description: 'Lead sent to generator for correction',
+        description: isUpdate 
+          ? 'Correction message updated. Lead generator will see the latest notes.'
+          : 'Lead sent to generator for correction',
       })
 
       setCorrectionDialogOpen(false)
@@ -1075,9 +1108,22 @@ export default function LeadDetail() {
                 <p className="text-xs text-muted-foreground">{lead?.niche_name} - {lead?.city_name}</p>
               </div>
 
+              {existingCorrectionMessage && (
+                <div className="bg-amber-50 border border-amber-200 rounded p-3">
+                  <p className="text-xs font-semibold text-amber-900 mb-2">
+                    ⚠️ This lead is already awaiting correction
+                  </p>
+                  <p className="text-xs text-amber-800 mb-2">Current message:</p>
+                  <p className="text-xs text-amber-700 bg-white p-2 rounded border border-amber-100 italic">
+                    "{existingCorrectionMessage}"
+                  </p>
+                  <p className="text-xs text-amber-700 mt-2">Update the message below to send new instructions to the lead generator:</p>
+                </div>
+              )}
+
               <div>
                 <label htmlFor="correction-notes" className="text-sm font-semibold text-foreground block mb-2">
-                  What needs correction? *
+                  {existingCorrectionMessage ? 'Updated notes (will replace previous message):' : 'What needs correction?'} *
                 </label>
                 <Textarea
                   id="correction-notes"
@@ -1093,7 +1139,11 @@ export default function LeadDetail() {
             <DialogFooter>
               <Button
                 variant="outline"
-                onClick={() => setCorrectionDialogOpen(false)}
+                onClick={() => {
+                  setCorrectionDialogOpen(false)
+                  setExistingCorrectionMessage(null)
+                  setCorrectionNotes('')
+                }}
                 disabled={submittingCorrection}
               >
                 Cancel
@@ -1106,10 +1156,10 @@ export default function LeadDetail() {
                 {submittingCorrection ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Sending...
+                    {existingCorrectionMessage ? 'Updating...' : 'Sending...'}
                   </>
                 ) : (
-                  'Send for Correction'
+                  existingCorrectionMessage ? 'Update Message' : 'Send for Correction'
                 )}
               </Button>
             </DialogFooter>
