@@ -3,25 +3,8 @@ import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
 import { hashPassword } from '@/lib/password'
 
-export async function PATCH(request: NextRequest) {
-  const { userId, password } = await request.json()
-
-  if (!userId || !password) {
-    return NextResponse.json(
-      { error: 'User ID and password are required' },
-      { status: 400 }
-    )
-  }
-
-  if (password.length < 6) {
-    return NextResponse.json(
-      { error: 'Password must be at least 6 characters long' },
-      { status: 400 }
-    )
-  }
-
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
+function createSupabaseServer(cookieStore: Awaited<ReturnType<typeof cookies>>) {
+  return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -41,8 +24,49 @@ export async function PATCH(request: NextRequest) {
       },
     }
   )
+}
 
+async function validateAdmin(request: NextRequest, cookieStore: Awaited<ReturnType<typeof cookies>>) {
+  const token = request.cookies.get('session_token')?.value
+  if (!token) return null
+
+  const supabase = createSupabaseServer(cookieStore)
+  const { data: sessionData } = await supabase
+    .from('sessions')
+    .select('user_id, role')
+    .eq('token', token)
+    .gt('expires_at', new Date().toISOString())
+    .single()
+
+  if (!sessionData || sessionData.role !== 'admin') return null
+  return { supabase, userId: sessionData.user_id }
+}
+
+export async function PATCH(request: NextRequest) {
   try {
+    const cookieStore = await cookies()
+    const auth = await validateAdmin(request, cookieStore)
+    if (!auth) {
+      return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+    }
+    const { supabase } = auth
+
+    const { userId, password } = await request.json()
+
+    if (!userId || !password) {
+      return NextResponse.json(
+        { error: 'User ID and password are required' },
+        { status: 400 }
+      )
+    }
+
+    if (password.length < 6) {
+      return NextResponse.json(
+        { error: 'Password must be at least 6 characters long' },
+        { status: 400 }
+      )
+    }
+
     // Hash the password
     const hashedPassword = await hashPassword(password)
 

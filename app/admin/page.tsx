@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
-import { useSession } from '@/lib/session'
+import { useSession, clearSessionCache } from '@/lib/session'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -169,14 +169,14 @@ export default function AdminDashboard() {
   // Check admin authentication on mount
   useEffect(() => {
     if (!sessionLoading && !session) {
-      router.push('/')
+      router.replace('/')
       return
     }
     if (sessionLoading) return
     
     // Check if user role is admin
     if (session && session.user_role !== 'admin') {
-      router.push('/')
+      router.replace('/')
       return
     }
 
@@ -284,7 +284,8 @@ export default function AdminDashboard() {
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
-      router.push('/')
+      clearSessionCache()
+      router.replace('/')
     }
   }
 

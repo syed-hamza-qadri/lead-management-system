@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { z } from 'zod'
+import { randomUUID } from 'crypto'
 
 // Admin password from server-only environment variable (NOT NEXT_PUBLIC_*)
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'
@@ -96,41 +97,42 @@ export async function POST(request: NextRequest) {
       throw new Error('Failed to get or create admin user')
     }
 
-    // Create session for admin with minimal required data
-    const sessionUrl = new URL('/api/sessions', request.nextUrl.origin).toString()
-    const sessionResponse = await fetch(
-      sessionUrl,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: adminUser.id,
-          role: 'admin',
-          userName: adminUser.name,
-        }),
-      }
-    )
+    // Create session directly in DB (no internal fetch round-trip)
+    const token = randomUUID()
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
 
-    if (!sessionResponse.ok) {
-      throw new Error('Failed to create session')
-    }
+    const { error: sessionError } = await supabase
+      .from('sessions')
+      .insert({
+        user_id: adminUser.id,
+        token,
+        role: 'admin',
+        user_name: adminUser.name,
+        expires_at: expiresAt,
+      })
 
-    const sessionData = await sessionResponse.json()
+    if (sessionError) throw new Error('Failed to create session')
 
-    // Log admin login activity
-    await supabase.from('activity_log').insert({
+    // Log admin login activity (non-blocking)
+    supabase.from('activity_log').insert({
       user_id: adminUser.id,
       action_type: 'login',
       description: `Admin ${adminUser.name} logged in`,
-    })
+    }).then(() => {})
 
     const response = NextResponse.json({
       message: 'Admin login successful',
       user: adminUser,
+      // Return session data so client can pre-populate cache
+      session: {
+        user_id: adminUser.id,
+        user_name: adminUser.name,
+        user_role: 'admin',
+      },
     })
 
     // Set HttpOnly secure cookie (cannot be accessed by JavaScript)
-    response.cookies.set('session_token', sessionData.token, {
+    response.cookies.set('session_token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',

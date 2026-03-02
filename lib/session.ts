@@ -10,8 +10,26 @@ interface SessionData {
 
 let sessionCache: SessionData | null = null
 let cacheTime = 0
-let lastToken = ''
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
+
+/**
+ * Pre-populate the session cache after login.
+ * Call this immediately after a successful login response to avoid
+ * the extra /api/sessions/validate round-trip on the next page.
+ * Note: We can't read HttpOnly cookies from JS, so we use a flag instead.
+ */
+export function prePopulateSessionCache(data: SessionData) {
+  sessionCache = data
+  cacheTime = Date.now()
+}
+
+/**
+ * Clear session cache on logout
+ */
+export function clearSessionCache() {
+  sessionCache = null
+  cacheTime = 0
+}
 
 export function useSession() {
   const [userId, setUserId] = useState<string | null>(null)
@@ -22,20 +40,8 @@ export function useSession() {
   useEffect(() => {
     const validateSession = async () => {
       try {
-        // Get current token from cookie to detect session changes
-        const currentToken = document.cookie
-          .split('; ')
-          .find((row) => row.startsWith('session_token='))
-          ?.split('=')[1]
-
-        // If token changed (new login/logout), clear cache
-        if (currentToken !== lastToken) {
-          sessionCache = null
-          cacheTime = 0
-          lastToken = currentToken || ''
-        }
-
         // Check if we have cached session data (within 5 minutes)
+        // This covers both pre-populated cache (after login) and previous validate results
         if (sessionCache && (Date.now() - cacheTime) < CACHE_DURATION) {
           setUserId(sessionCache.user_id)
           setToken('authenticated')
@@ -45,8 +51,9 @@ export function useSession() {
         }
 
         // Call server endpoint to validate session from HttpOnly cookie
+        // The cookie is HttpOnly so we can't check it from JS - let the server decide
         const response = await fetch('/api/sessions/validate', {
-          credentials: 'include', // Include HttpOnly cookies
+          credentials: 'include',
         })
 
         if (response.ok) {
@@ -62,10 +69,9 @@ export function useSession() {
           cacheTime = Date.now()
           
           setUserId(sessionData.user_id)
-          setToken('authenticated') // Not the actual token, just a flag
+          setToken('authenticated')
           setSession(sessionData)
         } else {
-          // Session invalid or expired - clear cache
           sessionCache = null
           setUserId(null)
           setToken(null)
@@ -89,11 +95,9 @@ export function useSession() {
 }
 
 export function getStoredToken(): string | null {
-  // This function is deprecated - session is now server-side only
   return null
 }
 
 export function getStoredUserId(): string | null {
-  // This function is deprecated - session is now server-side only
   return null
 }

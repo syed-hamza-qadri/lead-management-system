@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { prePopulateSessionCache } from '@/lib/session'
 
 export default function Home() {
   const router = useRouter()
@@ -34,9 +35,14 @@ export default function Home() {
         return
       }
 
-      // Token is in HttpOnly cookie, no need to store manually
-      localStorage.setItem('admin_role', 'admin')
-      router.push('/admin')
+      const data = await response.json()
+
+      // Pre-populate session cache to avoid validate round-trip
+      if (data.session) {
+        prePopulateSessionCache(data.session)
+      }
+
+      router.replace('/admin')
     } catch (err) {
       setError('Login failed')
       setAdminPassword('')

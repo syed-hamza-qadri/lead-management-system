@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Loader2 } from 'lucide-react'
+import { prePopulateSessionCache } from '@/lib/session'
 
 export default function PortalPage() {
   const router = useRouter()
@@ -22,6 +23,7 @@ export default function PortalPage() {
   useEffect(() => {
     const validateAndRoute = async () => {
       try {
+        // Cookie is HttpOnly - can't check from JS. Just call validate and let server decide.
         const response = await fetch('/api/sessions/validate', {
           credentials: 'include',
         })
@@ -30,13 +32,13 @@ export default function PortalPage() {
           const sessionData = await response.json()
           // Route based on role
           if (sessionData.user_role === 'admin') {
-            router.push('/admin')
+            router.replace('/admin')
           } else if (sessionData.user_role === 'manager') {
-            router.push('/portal/manager')
+            router.replace('/portal/manager')
           } else if (sessionData.user_role === 'lead_generator') {
-            router.push('/portal/lead-generator')
+            router.replace('/portal/lead-generator')
           } else if (sessionData.user_role === 'caller') {
-            router.push('/portal/caller')
+            router.replace('/portal/caller')
           }
         } else {
           setLoading(false)
@@ -81,16 +83,21 @@ export default function PortalPage() {
         description: `Welcome, ${data.user.name}!`,
       })
 
+      // Pre-populate session cache to avoid validate round-trip
+      if (data.session) {
+        prePopulateSessionCache(data.session)
+      }
+
       // Route based on role
       const role = data.user.role
       if (role === 'admin') {
-        router.push('/admin')
+        router.replace('/admin')
       } else if (role === 'manager') {
-        router.push('/portal/manager')
+        router.replace('/portal/manager')
       } else if (role === 'lead_generator') {
-        router.push('/portal/lead-generator')
+        router.replace('/portal/lead-generator')
       } else if (role === 'caller') {
-        router.push('/portal/caller')
+        router.replace('/portal/caller')
       }
     } catch (error) {
       console.error('[Portal] Login error:', error)

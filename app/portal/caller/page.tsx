@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
-import { useSession } from '@/lib/session'
+import { useSession, clearSessionCache } from '@/lib/session'
 import { getCallerLeads, getCallerNiches, getCallerCities } from '@/lib/auth'
 import { useDebounce } from '@/lib/debounce'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -83,7 +83,7 @@ export default function CallerPortal() {
 
   useEffect(() => {
     if (!sessionLoading && !session) {
-      router.push('/portal')
+      router.replace('/portal')
       return
     }
     if (session) {
@@ -102,14 +102,11 @@ export default function CallerPortal() {
   const fetchData = async (isRefresh: boolean = false) => {
     if (isRefresh) {
       setRefreshing(true)
-    } else {
-      setLoading(true)
     }
     
     try {
-      setLoading(false)
       if (!session?.user_id) {
-        router.push('/portal')
+        router.replace('/portal')
         return
       }
 
@@ -288,11 +285,12 @@ export default function CallerPortal() {
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
+      clearSessionCache()
       toast({
         title: 'Logged Out',
         description: 'You have been logged out successfully',
       })
-      router.push('/portal')
+      router.replace('/portal')
     }
   }
 

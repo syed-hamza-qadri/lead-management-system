@@ -173,7 +173,7 @@ export async function getCallerLeads(callerId: string) {
     .limit(100) // Pagination - limit to first 100
 
   if (leadsError || !leads) return []
-  return leads.slice(0, 100)
+  return leads
 }
 
 /**

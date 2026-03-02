@@ -61,14 +61,14 @@ export default function SetupPage() {
 
   useEffect(() => {
     if (!sessionLoading && !session) {
-      router.push('/')
+      router.replace('/')
       return
     }
     if (sessionLoading) return
     
     // Check if user role is admin
     if (session && session.user_role !== 'admin') {
-      router.push('/')
+      router.replace('/')
       return
     }
 

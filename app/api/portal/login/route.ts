@@ -3,6 +3,7 @@ import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
 import { comparePassword } from '@/lib/password'
 import { z } from 'zod'
+import { randomUUID } from 'crypto'
 
 // Validation schema
 const LoginSchema = z.object({
@@ -83,32 +84,28 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Create session in database with minimal required data
-    const sessionUrl = new URL('/api/sessions', request.nextUrl.origin).toString()
-    const sessionResponse = await fetch(
-      sessionUrl,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          userId: user.id,
-          role: user.role,
-          userName: user.name,
-        }),
-      }
-    )
+    // Create session directly in DB (no internal fetch round-trip)
+    const token = randomUUID()
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
 
-    if (!sessionResponse.ok) throw new Error('Failed to create session')
-    const sessionData = await sessionResponse.json()
+    const { error: sessionError } = await supabase
+      .from('sessions')
+      .insert({
+        user_id: user.id,
+        token,
+        role: user.role,
+        user_name: user.name,
+        expires_at: expiresAt,
+      })
 
-    // Log portal user login activity
-    await supabase.from('activity_log').insert({
+    if (sessionError) throw new Error('Failed to create session')
+
+    // Log portal user login activity (non-blocking)
+    supabase.from('activity_log').insert({
       user_id: user.id,
       action_type: 'login',
       description: `${user.role} ${user.name} logged in`,
-    })
+    }).then(() => {})
 
     // Return user data with token in secure HttpOnly cookie
     const { password: _, ...userWithoutPassword } = user
@@ -116,10 +113,16 @@ export async function POST(request: NextRequest) {
     const response = NextResponse.json({
       user: userWithoutPassword,
       message: 'Login successful',
+      // Return session data so client can pre-populate cache
+      session: {
+        user_id: user.id,
+        user_name: user.name,
+        user_role: user.role,
+      },
     })
 
     // Set HttpOnly secure cookie (cannot be accessed by JavaScript)
-    response.cookies.set('session_token', sessionData.token, {
+    response.cookies.set('session_token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',

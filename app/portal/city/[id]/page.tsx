@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
 import { useToast } from '@/hooks/use-toast'
-import { wasLeadPreviouslyScheduled, resetCorrectionStatus, getCorrectionStatusInfo } from '@/lib/auth'
+import { resetCorrectionStatus } from '@/lib/auth'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -107,15 +107,63 @@ export default function LeadList() {
       }
     })
 
-    // Enrich leads using maps (no additional queries) and check for wasScheduled flag + correction status
-    const enrichedLeads = await Promise.all((data || []).map(async (lead: any) => {
+    // Enrich leads using maps and batch-fetched correction/schedule data
+    // OPTIMIZATION: Batch fetch wasScheduled and correction info instead of N+1 queries
+    
+    // Batch fetch: which unassigned leads were previously scheduled
+    const unassignedLeadIds = (data || []).filter((l: any) => l.status === 'unassigned').map((l: any) => l.id)
+    const wasScheduledSet = new Set<string>()
+    if (unassignedLeadIds.length > 0) {
+      const { data: scheduledResponses } = await supabase
+        .from('lead_responses')
+        .select('lead_id')
+        .in('lead_id', unassignedLeadIds)
+        .in('action', ['scheduled', 'later', 'schedule'])
+      ;(scheduledResponses || []).forEach((r: any) => wasScheduledSet.add(r.lead_id))
+    }
+
+    // Batch fetch: pending corrections for all leads in this city
+    const { data: pendingCorrections } = await supabase
+      .from('lead_corrections')
+      .select('lead_id, reason_notes')
+      .in('lead_id', leadIds.length > 0 ? leadIds : [''])
+      .eq('status', 'pending')
+    const pendingCorrectionMap = new Map<string, string>()
+    ;(pendingCorrections || []).forEach((c: any) => {
+      pendingCorrectionMap.set(c.lead_id, c.reason_notes)
+    })
+
+    // Build correction info from the lead data itself (no extra queries needed)
+    const buildCorrectionInfo = (lead: any) => {
+      if (!lead.correction_status) {
+        return { hasCorrection: false, status: null, badge: null, message: 'Normal lead' }
+      }
+      if (lead.correction_status === 'pending') {
+        const notes = pendingCorrectionMap.get(lead.id)
+        return {
+          hasCorrection: true,
+          status: 'pending' as const,
+          badge: 'wrong' as const,
+          message: `Sent for correction: ${notes || 'No details provided'}`,
+        }
+      }
+      if (lead.correction_status === 'corrected') {
+        return {
+          hasCorrection: true,
+          status: 'corrected' as const,
+          badge: 'corrected' as const,
+          message: `Corrected on ${lead.corrected_at ? new Date(lead.corrected_at).toLocaleDateString() : 'unknown'}`,
+        }
+      }
+      return { hasCorrection: false, status: null, badge: null, message: 'Unknown status' }
+    }
+
+    const enrichedLeads = (data || []).map((lead: any) => {
       let daysRemaining = 0
       let wasLater = false
       let wasScheduled = false
       const actionInfo = actionMapInitial.get(lead.id)
-
-      // Get correction status info
-      const correctionInfo = await getCorrectionStatusInfo(lead.id)
+      const correctionInfo = buildCorrectionInfo(lead)
 
       if (lead.status === 'scheduled' && lead.follow_up_date) {
         const scheduledDate = new Date(lead.follow_up_date)
@@ -131,8 +179,6 @@ export default function LeadList() {
             .update({ status: 'unassigned' })
             .eq('id', lead.id)
             .then()
-          wasLater = true  // Mark that this was previously scheduled
-          wasScheduled = true  // Flag for Later - Unassigned
           return { 
             ...lead, 
             status: 'unassigned', 
@@ -146,21 +192,21 @@ export default function LeadList() {
         }
       }
 
-      // For unassigned leads, check if they were previously scheduled
+      // For unassigned leads, use batch-fetched data
       if (lead.status === 'unassigned') {
-        wasScheduled = await wasLeadPreviouslyScheduled(lead.id)
+        wasScheduled = wasScheduledSet.has(lead.id)
       }
 
       return { 
         ...lead, 
         daysRemaining, 
         was_later: wasLater, 
-        wasScheduled: wasScheduled,
+        wasScheduled,
         lastActionedAt: actionInfo?.actioned_at, 
         lastAction: actionInfo?.action,
         correctionInfo
       }
-    }))
+    })
 
     // Calculate performance metrics AFTER enrichment, based on CURRENT LEAD STATUS (not response action)
     // This ensures Later - Unassigned leads count as Pending when scheduled date passes
@@ -227,8 +273,8 @@ export default function LeadList() {
     }
 
     // Apply sorting to unassigned and assigned leads separately
-    const unassignedLeads = enrichedLeads.filter(l => l.status === 'unassigned' && l.correction_status !== 'pending')
-    const assignedLeads = enrichedLeads.filter(l => l.status !== 'unassigned' || l.correction_status === 'pending')
+    const unassignedLeads = enrichedLeads.filter((l: any) => l.status === 'unassigned' && l.correction_status !== 'pending')
+    const assignedLeads = enrichedLeads.filter((l: any) => l.status !== 'unassigned' || l.correction_status === 'pending')
     
     const sortedUnassigned = sortUnassignedLeads(unassignedLeads)
     const sortedAssigned = sortAssignedLeads(assignedLeads)

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
-import { useSession } from '@/lib/session'
+import { useSession, clearSessionCache } from '@/lib/session'
 import { useDebounce } from '@/lib/debounce'
 import {
   getManagerCallers,
@@ -191,7 +191,7 @@ export default function ManagerPortal() {
 
   useEffect(() => {
     if (!sessionLoading && !session) {
-      router.push('/portal')
+      router.replace('/portal')
       return
     }
     if (session) {
@@ -203,7 +203,7 @@ export default function ManagerPortal() {
     try {
       setLoading(true)
       if (!session?.user_id) {
-        router.push('/portal')
+        router.replace('/portal')
         return
       }
       const userId = session.user_id
@@ -413,20 +413,20 @@ export default function ManagerPortal() {
           wrong,
           corrected
         })
-
-        setCallerNiches(prev => ({
-          ...prev,
-          [caller.id]: nicheMapByCallerId.get(caller.id) || []
-        }))
-
-        setCallerCities(prev => ({
-          ...prev,
-          [caller.id]: callerCities
-        }))
       }
 
       // Batch set performance data
       setCallerPerformance(Object.fromEntries(performanceData))
+
+      // Batch set caller niches and cities (outside loop for efficiency)
+      const batchCallerNiches: { [key: string]: Niche[] } = {}
+      const batchCallerCities: { [key: string]: City[] } = {}
+      for (const caller of callersToDisplay) {
+        batchCallerNiches[caller.id] = nicheMapByCallerId.get(caller.id) || []
+        batchCallerCities[caller.id] = cityMapByCallerId.get(caller.id) || []
+      }
+      setCallerNiches(batchCallerNiches)
+      setCallerCities(batchCallerCities)
 
       // Create a map of lead_id to latest response (full response object)
       const responseMap: { [leadId: string]: any } = {}
@@ -501,7 +501,8 @@ export default function ManagerPortal() {
       const { data: leadsData, error: leadsError } = await supabase
         .from('leads')
         .select('*, creator:created_by(id, name), actioned_at')
-        .order('created_at', { ascending: false }) as any
+        .order('created_at', { ascending: false })
+        .limit(100) as any
 
       if (leadsError) {
         console.error('Error fetching leads:', leadsError)
@@ -1295,11 +1296,12 @@ export default function ManagerPortal() {
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
+      clearSessionCache()
       toast({
         title: 'Logged Out',
         description: 'You have been logged out successfully',
       })
-      router.push('/portal')
+      router.replace('/portal')
     }
   }
 

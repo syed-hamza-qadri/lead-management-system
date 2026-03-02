@@ -4,32 +4,56 @@ import { NextRequest, NextResponse } from 'next/server'
 import { hashPassword } from '@/lib/password'
 import { cacheHeaders } from '@/lib/cache'
 
+function createSupabaseServer(cookieStore: Awaited<ReturnType<typeof cookies>>) {
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            )
+          } catch {
+            // Ignored
+          }
+        },
+      },
+    }
+  )
+}
+
+async function validateAdmin(request: NextRequest, cookieStore: Awaited<ReturnType<typeof cookies>>) {
+  const token = request.cookies.get('session_token')?.value
+  if (!token) return null
+
+  const supabase = createSupabaseServer(cookieStore)
+  const { data: sessionData } = await supabase
+    .from('sessions')
+    .select('user_id, role')
+    .eq('token', token)
+    .gt('expires_at', new Date().toISOString())
+    .single()
+
+  if (!sessionData || sessionData.role !== 'admin') return null
+  return { supabase, userId: sessionData.user_id }
+}
+
 // Cache users list for 5 minutes
 export const revalidate = 300 // ISR revalidation
 
 export async function GET(request: NextRequest) {
   try {
     const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              )
-            } catch {
-              // Ignored
-            }
-          },
-        },
-      }
-    )
+    const auth = await validateAdmin(request, cookieStore)
+    if (!auth) {
+      return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+    }
+    const { supabase } = auth
 
     const { data, error } = await supabase
       .from('users')
@@ -56,38 +80,23 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const { name, email, role } = await request.json()
-
-  if (!name || !email || !role) {
-    return NextResponse.json(
-      { error: 'Name, email, and role are required' },
-      { status: 400 }
-    )
-  }
-
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {
-            // Ignored
-          }
-        },
-      },
-    }
-  )
-
   try {
+    const cookieStore = await cookies()
+    const auth = await validateAdmin(request, cookieStore)
+    if (!auth) {
+      return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+    }
+    const { supabase } = auth
+
+    const { name, email, role } = await request.json()
+
+    if (!name || !email || !role) {
+      return NextResponse.json(
+        { error: 'Name, email, and role are required' },
+        { status: 400 }
+      )
+    }
+
     // Generate a temporary password
     const tempPassword = Math.random().toString(36).slice(-8)
 

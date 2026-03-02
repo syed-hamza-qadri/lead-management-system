@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
-import { useSession } from '@/lib/session'
+import { useSession, clearSessionCache } from '@/lib/session'
 import { getPendingCorrectionsForLeadGenerator, completeLeadCorrection } from '@/lib/auth'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -106,7 +106,7 @@ export default function LeadGenerator() {
 
   useEffect(() => {
     if (!sessionLoading && !session) {
-      router.push('/portal')
+      router.replace('/portal')
       return
     }
     if (session) {
@@ -136,7 +136,7 @@ export default function LeadGenerator() {
     try {
       setLoading(true)
       if (!session?.user_id) {
-        router.push('/portal')
+        router.replace('/portal')
         return
       }
       const userId = session.user_id
@@ -511,11 +511,12 @@ export default function LeadGenerator() {
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
+      clearSessionCache()
       toast({
         title: 'Logged Out',
         description: 'You have been logged out successfully',
       })
-      router.push('/portal')
+      router.replace('/portal')
     }
   }
 
