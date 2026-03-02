@@ -1,48 +1,53 @@
 'use client'
 
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { SearchX } from 'lucide-react'
+import { Card, CardContent } from '@/components/ui/card'
+import { ArrowLeft, AlertCircle } from 'lucide-react'
 import Link from 'next/link'
 
 export default function NotFound() {
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center p-4">
-      <div className="max-w-md w-full">
-        <Card className="border-0 shadow-lg">
-          <CardHeader className="text-center space-y-4 pb-6">
+    <main className="min-h-screen bg-gradient-to-br from-background via-background to-secondary flex flex-col items-center justify-center p-4">
+      <div className="w-full max-w-md">
+        <Card className="border border-border/60 backdrop-blur-sm bg-card/80">
+          <CardContent className="p-8 text-center space-y-8">
             <div className="flex justify-center">
-              <div className="bg-red-100 p-4 rounded-full">
-                <SearchX className="w-12 h-12 text-red-600" />
+              <div className="relative w-20 h-20 rounded-full bg-gradient-to-br from-primary/20 to-accent/20 border border-primary/30 flex items-center justify-center">
+                <AlertCircle className="w-10 h-10 text-primary" />
+                <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-primary/80 flex items-center justify-center text-white text-xs font-bold">
+                  404
+                </div>
               </div>
             </div>
-            <div>
-              <div className="text-6xl font-bold text-foreground mb-2">404</div>
-              <CardTitle className="text-2xl">Page Not Found</CardTitle>
-              <CardDescription className="text-base mt-2">
-                The page you're looking for doesn't exist or has been moved.
-              </CardDescription>
+
+            <div className="space-y-3">
+              <h1 className="text-4xl font-bold text-foreground">Page Not Found</h1>
+              <p className="text-muted-foreground">
+                The page you're looking for doesn't exist or has been moved. Let's get you back on track.
+              </p>
             </div>
-          </CardHeader>
 
-          <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              The resource you requested could not be found on this server. Please check the URL and try again.
-            </p>
-
-            <div className="flex flex-col gap-2 pt-2">
+            <div className="flex flex-col gap-3 pt-4">
+              <Link href="/" className="w-full">
+                <Button className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-medium">
+                  <ArrowLeft className="w-4 h-4 mr-2" />
+                  Go Home
+                </Button>
+              </Link>
               <Link href="/portal" className="w-full">
-                <Button variant="default" className="w-full">
+                <Button variant="outline" className="w-full border-border/60">
                   Go to Portal
                 </Button>
               </Link>
             </div>
+
+            <div className="pt-4 border-t border-border/40">
+              <p className="text-xs text-muted-foreground">
+                If you believe this is a mistake, please contact support
+              </p>
+            </div>
           </CardContent>
         </Card>
-
-        <p className="text-center text-xs text-muted-foreground mt-6">
-          If you believe this is a mistake, please contact support.
-        </p>
       </div>
     </main>
   )

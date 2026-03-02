@@ -11,10 +11,12 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, LogOut, Users, Filter, RotateCcw, RefreshCw, Database, Download, Upload, Trash2, AlertTriangle, CheckCircle2, Shield } from 'lucide-react'
+import { Loader2, LogOut, Users, Filter, RotateCcw, RefreshCw, Database, Download, Upload, Trash2, AlertTriangle, CheckCircle2, Shield, Activity, TrendingUp } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Progress } from '@/components/ui/progress'
+import Header from '@/components/header'
+import StatsCard from '@/components/stats-card'
 
 interface ActiveUserDetail {
   user_id: string
@@ -405,87 +407,57 @@ export default function AdminDashboard() {
   }
 
   return (
-    <main className="min-h-screen bg-background p-8">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground">Admin Dashboard</h1>
-            <p className="text-muted-foreground mt-2">Monitor system activity and manage users</p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="flex items-center gap-2"
-            >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-              {refreshing ? 'Refreshing...' : 'Reload'}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                router.push('/admin/setup')
-              }}
-              className="flex items-center gap-2"
-            >
-              Setup Data
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleLogout}
-              className="flex items-center gap-2"
-            >
-              <LogOut className="w-4 h-4" />
-              Logout
-            </Button>
-          </div>
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium">Total Leads</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{stats.total_leads}</div>
-              <p className="text-xs text-muted-foreground mt-1">In system</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium">Total Responses</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{stats.total_responses}</div>
-              <p className="text-xs text-muted-foreground mt-1">Actions taken</p>
-            </CardContent>
-          </Card>
-          <Card 
-            className="cursor-pointer hover:shadow-md transition-shadow"
-            onClick={() => setShowActiveUsersDialog(true)}
+    <main className="min-h-screen bg-gradient-to-br from-background via-background to-secondary">
+      <Header
+        title="Admin Dashboard"
+        subtitle="Monitor system activity and manage users"
+        onRefresh={handleRefresh}
+        refreshing={refreshing}
+        actionButtons={
+          <Button
+            variant="outline"
+            onClick={() => router.push('/admin/setup')}
+            className="border-border/60"
           >
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                Active Users (24h)
-                <Users className="w-4 h-4 text-muted-foreground" />
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{stats.active_users}</div>
-              <p className="text-xs text-muted-foreground mt-1">Click to view details</p>
-            </CardContent>
-          </Card>
+            Setup Data
+          </Button>
+        }
+        onLogout={handleLogout}
+      />
+
+      <div className="max-w-7xl mx-auto p-6 space-y-8">
+        {/* Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <StatsCard
+            title="Total Leads"
+            value={stats.total_leads}
+            description="Active leads in system"
+            icon={TrendingUp}
+            variant="accent"
+          />
+          <StatsCard
+            title="Total Responses"
+            value={stats.total_responses}
+            description="Actions and interactions"
+            icon={Activity}
+            variant="accent"
+          />
+          <StatsCard
+            title="Active Users (24h)"
+            value={stats.active_users}
+            description="Click to view details"
+            icon={Users}
+            variant="accent"
+            onClick={() => setShowActiveUsersDialog(true)}
+          />
         </div>
 
         {/* Tabs */}
         <Tabs defaultValue="activity" className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="activity">Activity Log</TabsTrigger>
-            <TabsTrigger value="users">Manage Users</TabsTrigger>
-            <TabsTrigger value="backup">Backup & Data</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-3 bg-secondary/50 border border-border/60">
+            <TabsTrigger value="activity" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Activity Log</TabsTrigger>
+            <TabsTrigger value="users" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Manage Users</TabsTrigger>
+            <TabsTrigger value="backup" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Backup & Data</TabsTrigger>
           </TabsList>
 
           {/* Activity Tab */}

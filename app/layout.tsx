@@ -5,13 +5,20 @@ import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from '@/components/ui/toaster'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const _geist = Geist({ subsets: ["latin"], variable: "--font-geist-sans" });
+const _geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
 
 export const metadata: Metadata = {
   title: 'Lead Management System',
-  description: 'Professional lead management system for employee tracking and admin oversight',
+  description: 'Professional lead management system for enterprise-grade sales operations',
   generator: 'v0.app',
+  viewport: {
+    width: 'device-width',
+    initialScale: 1,
+    maximumScale: 1,
+    userScalable: false,
+    viewportFit: 'cover',
+  },
   icons: {
     icon: [
       {
@@ -37,8 +44,8 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
-      <body className={`font-sans antialiased`}>
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${_geist.variable} ${_geistMono.variable} font-sans antialiased`}>
         {children}
         <Toaster />
         <Analytics />
