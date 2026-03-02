@@ -171,9 +171,14 @@ export default function LeadGenerator() {
       
       ;(leadsData || []).forEach((lead: any) => {
         if (lead.correction_status === 'pending') {
+          // Awaiting correction - NOT pending assignment
           wrong++
         } else if (lead.correction_status === 'corrected') {
+          // Corrected - ready for assignment, so count in pending
           corrected++
+          if (lead.status === 'unassigned') {
+            pending++
+          }
         } else if (lead.status === 'approved') {
           approved++
         } else if (lead.status === 'declined') {
@@ -229,9 +234,14 @@ export default function LeadGenerator() {
       
       ;(leadsData || []).forEach((lead: any) => {
         if (lead.correction_status === 'pending') {
+          // Awaiting correction - NOT pending assignment
           wrong++
         } else if (lead.correction_status === 'corrected') {
+          // Corrected - ready for assignment, so count in pending
           corrected++
+          if (lead.status === 'unassigned') {
+            pending++
+          }
         } else if (lead.status === 'approved') {
           approved++
         } else if (lead.status === 'declined') {

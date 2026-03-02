@@ -312,7 +312,8 @@ export default function ManagerPortal() {
       let completedCorrection = 0
       
       ;(leadsData || []).forEach((lead: any) => {
-        if (lead.status === 'unassigned') metrics.pending++
+        // Exclude leads awaiting correction from pending count
+        if (lead.status === 'unassigned' && lead.correction_status !== 'pending') metrics.pending++
         else if (lead.status === 'approved') metrics.approved++
         else if (lead.status === 'scheduled') metrics.scheduled++
         else if (lead.status === 'declined') metrics.declined++
@@ -579,7 +580,8 @@ export default function ManagerPortal() {
       let completedCorrection = 0
       
       ;(leadsData || []).forEach((lead: any) => {
-        if (lead.status === 'unassigned') metrics.pending++
+        // Exclude leads awaiting correction from pending count
+        if (lead.status === 'unassigned' && lead.correction_status !== 'pending') metrics.pending++
         else if (lead.status === 'approved') metrics.approved++
         else if (lead.status === 'scheduled') metrics.scheduled++
         else if (lead.status === 'declined') metrics.declined++
@@ -842,7 +844,7 @@ export default function ManagerPortal() {
         if (assignedCityIds.length > 0) {
           const { data: citiesLeads } = await supabase
             .from('leads')
-            .select('id, status')
+            .select('id, status, correction_status')
             .in('city_id', assignedCityIds) as any
           leadsInAssignedCities = citiesLeads || []
         }
@@ -857,9 +859,14 @@ export default function ManagerPortal() {
 
         ;(leadsInAssignedCities || []).forEach((lead: any) => {
           if (lead.correction_status === 'pending') {
+            // Awaiting correction - NOT pending assignment
             wrong++
           } else if (lead.correction_status === 'corrected') {
+            // Corrected - ready for assignment, so count in pending
             corrected++
+            if (lead.status === 'unassigned') {
+              pending++
+            }
           } else if (lead.status === 'approved') {
             approved++
           } else if (lead.status === 'declined') {
@@ -885,11 +892,39 @@ export default function ManagerPortal() {
         }))
       }
 
+      // Fetch fresh niche and city assignments for dashboard display
+      const { data: allNicheAssignments } = await supabase
+        .from('niche_assignments')
+        .select('caller_id, niches(id, name)')
+        .in('caller_id', callersToDisplay.map(c => c.id)) as any
+
+      const { data: allCityAssignments } = await supabase
+        .from('city_assignments')
+        .select('caller_id, assigned_by, city_id, cities(id, name)')
+        .in('caller_id', callersToDisplay.map(c => c.id)) as any
+      
+      // Update niche and city assignments in state
+      ;(callersToDisplay || []).forEach((caller: Caller) => {
+        const nicheAssignments = (allNicheAssignments || []).filter((na: any) => na.caller_id === caller.id)
+        setCallerNiches(prev => ({
+          ...prev,
+          [caller.id]: nicheAssignments.map((na: any) => na.niches)
+        }))
+        
+        const cityAssignments = (allCityAssignments || []).filter((ca: any) => ca.caller_id === caller.id)
+        setCallerCities(prev => ({
+          ...prev,
+          [caller.id]: cityAssignments.map((ca: any) => ca.cities)
+        }))
+      })
+      
+      setCityAssignmentsData(allCityAssignments || [])
+
       // Also refresh lead generator performance on dashboard refresh
       try {
         const { data: freshLeads } = await supabase
           .from('leads')
-          .select('id, created_by, status')
+          .select('id, created_by, status, correction_status')
           .order('created_at', { ascending: false }) as any
 
         const { data: freshResponses } = await supabase
@@ -919,20 +954,32 @@ export default function ManagerPortal() {
           }
         })
 
-        // Calculate lead status metrics for summary cards
+        // Calculate lead status metrics and correction metrics for summary cards
         const metrics = {
           pending: 0,
           approved: 0,
           scheduled: 0,
           declined: 0
         }
+        let pendingCorrection = 0
+        let completedCorrection = 0
+        
         ;(freshLeads || []).forEach((lead: any) => {
-          if (lead.status === 'unassigned') metrics.pending++
+          // Exclude leads awaiting correction from pending count
+          if (lead.status === 'unassigned' && lead.correction_status !== 'pending') metrics.pending++
           else if (lead.status === 'approved') metrics.approved++
           else if (lead.status === 'scheduled') metrics.scheduled++
           else if (lead.status === 'declined') metrics.declined++
+          
+          // Count correction metrics
+          if (lead.correction_status === 'pending') pendingCorrection++
+          else if (lead.correction_status === 'corrected') completedCorrection++
         })
         setLeadStatusMetrics(metrics)
+        setCorrectionMetrics({
+          pendingCorrection,
+          completedCorrection
+        })
 
         // Calculate lead generator performance
         const generatorPerformanceMap = new Map<string, LeadGeneratorPerformance>()
@@ -950,9 +997,14 @@ export default function ManagerPortal() {
           
           generatorLeads.forEach((lead: any) => {
             if (lead.correction_status === 'pending') {
+              // Awaiting correction - NOT pending assignment
               wrong++
             } else if (lead.correction_status === 'corrected') {
+              // Corrected - ready for assignment, so count in pending
               corrected++
+              if (lead.status === 'unassigned') {
+                pending++
+              }
             } else if (lead.status === 'approved') {
               approved++
             } else if (lead.status === 'declined') {
@@ -1124,7 +1176,8 @@ export default function ManagerPortal() {
         declined: 0
       }
       ;(leadRes.data || []).forEach((lead: any) => {
-        if (lead.status === 'unassigned') metrics.pending++
+        // Exclude leads awaiting correction from pending count
+        if (lead.status === 'unassigned' && lead.correction_status !== 'pending') metrics.pending++
         else if (lead.status === 'approved') metrics.approved++
         else if (lead.status === 'scheduled') metrics.scheduled++
         else if (lead.status === 'declined') metrics.declined++
