@@ -127,6 +127,12 @@ export default function UserManagement() {
         title: 'User Created Successfully',
         description: `Password: ${data.tempPassword}`,
       })
+
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'create_user',
+        description: `Admin created user: ${formData.name} (${formData.role})`,
+      })
       
       // Show additional info in a second toast
       setTimeout(() => {
@@ -177,6 +183,12 @@ export default function UserManagement() {
         throw new Error(error.message || JSON.stringify(error))
       }
 
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'update_user',
+        description: `Admin updated user: ${formData.name} (${formData.role})`,
+      })
+
       toast({
         title: 'Success',
         description: 'User updated successfully',
@@ -221,6 +233,11 @@ export default function UserManagement() {
         .eq('id', userToDelete)
 
       if (error) throw error
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'delete_user',
+        description: `Admin deleted a user`,
+      })
       toast({
         title: 'Success',
         description: 'User deleted successfully',
@@ -282,6 +299,13 @@ export default function UserManagement() {
       toast({
         title: 'Password Updated',
         description: `New Password: ${data.password}`,
+      })
+
+      const targetUser = users.find(u => u.id === selectedUserId)
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'reset_password',
+        description: `Admin reset password for user: ${targetUser?.name || 'Unknown'}`,
       })
       
       // Show additional info in a second toast

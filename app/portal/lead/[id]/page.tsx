@@ -421,6 +421,14 @@ export default function LeadDetail() {
           : 'Lead sent to generator for correction',
       })
 
+      // Log activity
+      await supabase.from('activity_log').insert({
+        user_id: userId,
+        action_type: 'send_correction',
+        lead_id: leadId,
+        description: `${role} sent lead for correction: ${correctionNotes.substring(0, 100)}`,
+      })
+
       setCorrectionDialogOpen(false)
       setCorrectionNotes('')
 

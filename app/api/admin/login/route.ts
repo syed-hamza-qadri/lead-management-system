@@ -117,6 +117,13 @@ export async function POST(request: NextRequest) {
 
     const sessionData = await sessionResponse.json()
 
+    // Log admin login activity
+    await supabase.from('activity_log').insert({
+      user_id: adminUser.id,
+      action_type: 'login',
+      description: `Admin ${adminUser.name} logged in`,
+    })
+
     const response = NextResponse.json({
       message: 'Admin login successful',
       user: adminUser,

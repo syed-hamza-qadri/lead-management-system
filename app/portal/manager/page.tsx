@@ -732,6 +732,15 @@ export default function ManagerPortal() {
         description: 'Lead status updated successfully',
       })
 
+      // Log activity
+      const lead = leads.find(l => l.id === leadId)
+      await supabase.from('activity_log').insert({
+        user_id: session.user_id,
+        action_type: mappedStatus,
+        lead_id: leadId,
+        description: `Manager ${mappedStatus} lead: ${lead?.data?.name || 'Unknown'}${statusMessage ? ' - ' + statusMessage : ''}`,
+      })
+
       // Refresh dashboard metrics in background (don't await to close dialog immediately)
       refreshDashboard()
 
@@ -1234,6 +1243,13 @@ export default function ManagerPortal() {
       const citySuccess = await assignCityToCaller(callerId, cityId, session?.user_id || '')
       if (!citySuccess) throw new Error('Failed to assign city')
 
+      // Log activity
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'assign_niche_city',
+        description: `Manager assigned niche and city to caller`,
+      })
+
       toast({
         title: 'Success',
         description: 'Niche and city assigned successfully',
@@ -1355,6 +1371,14 @@ export default function ManagerPortal() {
         description: isUpdate 
           ? 'Correction message updated. Lead generator will see the latest notes.'
           : 'Lead sent to generator for correction',
+      })
+
+      // Log activity
+      await supabase.from('activity_log').insert({
+        user_id: session.user_id,
+        action_type: 'send_correction',
+        lead_id: correctionLeadId,
+        description: `Manager sent lead for correction: ${correctionNotes.substring(0, 100)}`,
       })
 
       setCorrectionDialogOpen(false)
@@ -2658,6 +2682,11 @@ export default function ManagerPortal() {
                                 .from('niches')
                                 .insert({ name: setupForms.nicheName })
                               if (error) throw error
+                              await supabase.from('activity_log').insert({
+                                user_id: session?.user_id,
+                                action_type: 'add_niche',
+                                description: `Manager added niche: ${setupForms.nicheName}`,
+                              })
                               toast({
                                 title: 'Success',
                                 description: 'Niche added successfully',
@@ -2717,6 +2746,11 @@ export default function ManagerPortal() {
                                 .from('cities')
                                 .insert({ name: setupForms.cityName, niche_id: setupForms.selectedNiche })
                               if (error) throw error
+                              await supabase.from('activity_log').insert({
+                                user_id: session?.user_id,
+                                action_type: 'add_city',
+                                description: `Manager added city: ${setupForms.cityName}`,
+                              })
                               toast({
                                 title: 'Success',
                                 description: 'City added successfully',
@@ -2796,6 +2830,11 @@ export default function ManagerPortal() {
                                         .update({ name: editingNiche.name })
                                         .eq('id', editingNiche.id)
                                       if (error) throw error
+                                      await supabase.from('activity_log').insert({
+                                        user_id: session?.user_id,
+                                        action_type: 'edit_niche',
+                                        description: `Manager updated niche to: ${editingNiche.name}`,
+                                      })
                                       toast({
                                         title: 'Success',
                                         description: 'Niche updated successfully',
@@ -2857,6 +2896,11 @@ export default function ManagerPortal() {
                                               .update({ name: editingCity.name, niche_id: editingCity.niche_id })
                                               .eq('id', editingCity.id)
                                             if (error) throw error
+                                            await supabase.from('activity_log').insert({
+                                              user_id: session?.user_id,
+                                              action_type: 'edit_city',
+                                              description: `Manager updated city to: ${editingCity.name}`,
+                                            })
                                             toast({
                                               title: 'Success',
                                               description: 'City updated successfully',
@@ -2973,6 +3017,11 @@ export default function ManagerPortal() {
                                 created_by: session?.user_id,
                               })
                             if (error) throw error
+                            await supabase.from('activity_log').insert({
+                              user_id: session?.user_id,
+                              action_type: 'create_lead',
+                              description: `Manager created lead: ${setupForms.leadName}`,
+                            })
                             toast({
                               title: 'Success',
                               description: 'Lead added successfully',

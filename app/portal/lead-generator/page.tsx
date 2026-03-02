@@ -323,6 +323,13 @@ export default function LeadGenerator() {
           title: 'Success',
           description: 'Lead updated successfully',
         })
+        // Log activity
+        await supabase.from('activity_log').insert({
+          user_id: session?.user_id,
+          action_type: 'update_lead',
+          lead_id: editingId,
+          description: `Lead generator updated lead: ${leadName}`,
+        })
         setIsEditing(false)
         setEditingId(null)
       } else {
@@ -349,6 +356,12 @@ export default function LeadGenerator() {
         toast({
           title: 'Success',
           description: 'Lead created successfully',
+        })
+        // Log activity
+        await supabase.from('activity_log').insert({
+          user_id: userId,
+          action_type: 'create_lead',
+          description: `Lead generator created lead: ${leadName}`,
         })
       }
 
@@ -454,6 +467,13 @@ export default function LeadGenerator() {
 
       if (deleteError) throw deleteError
 
+      // Log activity
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'delete_lead',
+        description: `Lead generator deleted a lead`,
+      })
+
       toast({
         title: 'Success',
         description: 'Lead deleted successfully',
@@ -511,6 +531,13 @@ export default function LeadGenerator() {
       toast({
         title: 'Success',
         description: 'Correction marked as complete. Lead reset to unassigned status.',
+      })
+
+      // Log activity
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'complete_correction',
+        description: `Lead generator completed a lead correction`,
       })
 
       // Refresh corrections and refresh tabs to show updated lead

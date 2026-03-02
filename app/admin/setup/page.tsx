@@ -192,6 +192,12 @@ export default function SetupPage() {
 
       if (error) throw error
 
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'add_niche',
+        description: `Admin added niche: ${nicheName}`,
+      })
+
       toast({
         title: 'Success',
         description: 'Niche added successfully',
@@ -240,6 +246,12 @@ export default function SetupPage() {
         })
 
       if (error) throw error
+
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'add_city',
+        description: `Admin added city: ${cityName}`,
+      })
 
       toast({
         title: 'Success',
@@ -315,6 +327,12 @@ export default function SetupPage() {
 
       if (error) throw error
 
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'create_lead',
+        description: `Admin created lead: ${leadName}`,
+      })
+
       toast({
         title: 'Success',
         description: 'Lead added successfully',
@@ -383,6 +401,12 @@ export default function SetupPage() {
 
       if (error) throw error
 
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'edit_niche',
+        description: `Admin updated niche to: ${nicheName}`,
+      })
+
       toast({
         title: 'Success',
         description: 'Niche updated successfully',
@@ -413,6 +437,11 @@ export default function SetupPage() {
     if (!deleteItemId) return
     try {
       await supabase.from('niches').delete().eq('id', deleteItemId)
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'delete_niche',
+        description: `Admin deleted a niche`,
+      })
       toast({
         title: 'Success',
         description: 'Niche deleted successfully',
@@ -461,6 +490,12 @@ export default function SetupPage() {
 
       if (error) throw error
 
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'edit_city',
+        description: `Admin updated city to: ${cityName}`,
+      })
+
       toast({
         title: 'Success',
         description: 'City updated successfully',
@@ -492,6 +527,11 @@ export default function SetupPage() {
     if (!deleteItemId) return
     try {
       await supabase.from('cities').delete().eq('id', deleteItemId)
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'delete_city',
+        description: `Admin deleted a city`,
+      })
       toast({
         title: 'Success',
         description: 'City deleted successfully',
@@ -582,6 +622,13 @@ export default function SetupPage() {
 
       if (error) throw error
 
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'update_lead',
+        lead_id: editingLeadId,
+        description: `Admin updated lead: ${leadName}`,
+      })
+
       toast({
         title: 'Success',
         description: 'Lead updated successfully',
@@ -615,6 +662,11 @@ export default function SetupPage() {
     if (!deleteItemId) return
     try {
       await supabase.from('leads').delete().eq('id', deleteItemId)
+      await supabase.from('activity_log').insert({
+        user_id: session?.user_id,
+        action_type: 'delete_lead',
+        description: `Admin deleted a lead`,
+      })
       toast({
         title: 'Success',
         description: 'Lead deleted successfully',
