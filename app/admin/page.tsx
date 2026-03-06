@@ -207,6 +207,7 @@ export default function AdminDashboard() {
       lead_approved: 'bg-green-100 text-green-800',
       lead_declined: 'bg-red-100 text-red-800',
       lead_scheduled: 'bg-yellow-100 text-yellow-800',
+      auto_reset_scheduled: 'bg-amber-100 text-amber-800',
       // Correction actions
       send_correction: 'bg-orange-100 text-orange-800',
       complete_correction: 'bg-teal-100 text-teal-800',

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
+import { useSession } from '@/lib/session'
 import { useToast } from '@/hooks/use-toast'
 import { resetCorrectionStatus } from '@/lib/auth'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -45,6 +46,7 @@ export default function LeadList() {
   const [defaultTab, setDefaultTab] = useState('unassigned')
   const [performanceOpen, setPerformanceOpen] = useState(false)
   const [performance, setPerformance] = useState({ approved: 0, declined: 0, scheduled: 0, pending: 0, wrong: 0, corrected: 0 })
+  const { session } = useSession()
   const supabase = getSupabaseClient()
 
   // Check for tab query parameter
@@ -174,11 +176,24 @@ export default function LeadList() {
         
         // If scheduled date has passed, update status
         if (daysRemaining <= 0) {
-          supabase
-            .from('leads')
-            .update({ status: 'unassigned' })
-            .eq('id', lead.id)
-            .then()
+          void (async () => {
+            const { error: resetError } = await supabase
+              .from('leads')
+              .update({ status: 'unassigned' })
+              .eq('id', lead.id)
+
+            if (!resetError && session?.user_id) {
+              await supabase
+                .from('activity_log')
+                .insert({
+                  user_id: session.user_id,
+                  lead_id: lead.id,
+                  action_type: 'auto_reset_scheduled',
+                  description: `Scheduled lead auto-reset to unassigned after follow-up date: ${lead.data?.name || 'Unknown'}`,
+                })
+            }
+          })()
+
           return { 
             ...lead, 
             status: 'unassigned', 

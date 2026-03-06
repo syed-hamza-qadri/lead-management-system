@@ -338,7 +338,7 @@ export default function LeadGenerator() {
           throw new Error('Session not found')
         }
         const userId = session.user_id
-        const { error } = await supabase
+        const { data: createdLead, error } = await supabase
           .from('leads')
           .insert({
             niche_id: selectedNiche,
@@ -347,6 +347,8 @@ export default function LeadGenerator() {
             status: 'unassigned',
             created_by: userId,
           })
+          .select('id')
+          .single()
 
         if (error) {
           console.error('Supabase error (insert):', error)
@@ -361,6 +363,7 @@ export default function LeadGenerator() {
         await supabase.from('activity_log').insert({
           user_id: userId,
           action_type: 'create_lead',
+          lead_id: createdLead?.id,
           description: `Lead generator created lead: ${leadName}`,
         })
       }
@@ -471,6 +474,7 @@ export default function LeadGenerator() {
       await supabase.from('activity_log').insert({
         user_id: session?.user_id,
         action_type: 'delete_lead',
+        lead_id: leadToDelete,
         description: `Lead generator deleted a lead`,
       })
 
@@ -523,6 +527,7 @@ export default function LeadGenerator() {
   const handleCompleteCorrection = async (correctionId: string) => {
     setCompletingCorrectionId(correctionId)
     try {
+      const correction = corrections.find(c => c.id === correctionId)
       const { success, error } = await completeLeadCorrection(correctionId)
 
       if (!success) {
@@ -538,6 +543,7 @@ export default function LeadGenerator() {
       await supabase.from('activity_log').insert({
         user_id: session?.user_id,
         action_type: 'complete_correction',
+        lead_id: correction?.lead_id || null,
         description: `Lead generator completed a lead correction`,
       })
 
