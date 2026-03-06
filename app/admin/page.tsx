@@ -227,6 +227,10 @@ export default function AdminDashboard() {
       delete_city: 'bg-red-100 text-red-800',
       // Assignment actions
       assign_niche_city: 'bg-purple-100 text-purple-800',
+      assign_niche: 'bg-purple-100 text-purple-800',
+      unassign_niche: 'bg-purple-100 text-purple-800',
+      assign_city: 'bg-fuchsia-100 text-fuchsia-800',
+      unassign_city: 'bg-fuchsia-100 text-fuchsia-800',
       // Backup actions
       backup_download: 'bg-blue-100 text-blue-800',
       backup_restore: 'bg-amber-100 text-amber-800',

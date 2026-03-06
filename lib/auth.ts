@@ -8,6 +8,26 @@ const supabase = createClient(
 
 export type UserRole = 'admin' | 'manager' | 'caller' | 'lead_generator'
 
+async function logActivity(
+  userId: string | undefined,
+  actionType: string,
+  description: string,
+  leadId?: string
+): Promise<void> {
+  if (!userId) return
+
+  try {
+    await supabase.from('activity_log').insert({
+      user_id: userId,
+      action_type: actionType,
+      lead_id: leadId || null,
+      description,
+    })
+  } catch {
+    // Non-blocking: activity logging should not break core user actions
+  }
+}
+
 /**
  * Check if user has specific role
  */
@@ -226,6 +246,19 @@ export async function assignNicheToCaller(
       assigned_by: assignedBy
     })
 
+  if (!error) {
+    const [{ data: caller }, { data: niche }] = await Promise.all([
+      supabase.from('users').select('name').eq('id', callerId).single(),
+      supabase.from('niches').select('name').eq('id', nicheId).single(),
+    ])
+
+    await logActivity(
+      assignedBy,
+      'assign_niche',
+      `Manager assigned niche ${niche?.name || nicheId} to caller ${caller?.name || callerId}`
+    )
+  }
+
   return !error
 }
 
@@ -234,13 +267,27 @@ export async function assignNicheToCaller(
  */
 export async function unassignNicheFromCaller(
   callerId: string,
-  nicheId: string
+  nicheId: string,
+  unassignedBy?: string
 ): Promise<boolean> {
   const { error } = await supabase
     .from('niche_assignments')
     .delete()
     .eq('caller_id', callerId)
     .eq('niche_id', nicheId)
+
+  if (!error && unassignedBy) {
+    const [{ data: caller }, { data: niche }] = await Promise.all([
+      supabase.from('users').select('name').eq('id', callerId).single(),
+      supabase.from('niches').select('name').eq('id', nicheId).single(),
+    ])
+
+    await logActivity(
+      unassignedBy,
+      'unassign_niche',
+      `Manager unassigned niche ${niche?.name || nicheId} from caller ${caller?.name || callerId}`
+    )
+  }
 
   return !error
 }
@@ -261,6 +308,19 @@ export async function assignCityToCaller(
       assigned_by: assignedBy
     })
 
+  if (!error) {
+    const [{ data: caller }, { data: city }] = await Promise.all([
+      supabase.from('users').select('name').eq('id', callerId).single(),
+      supabase.from('cities').select('name').eq('id', cityId).single(),
+    ])
+
+    await logActivity(
+      assignedBy,
+      'assign_city',
+      `Manager assigned city ${city?.name || cityId} to caller ${caller?.name || callerId}`
+    )
+  }
+
   return !error
 }
 
@@ -269,13 +329,27 @@ export async function assignCityToCaller(
  */
 export async function unassignCityFromCaller(
   callerId: string,
-  cityId: string
+  cityId: string,
+  unassignedBy?: string
 ): Promise<boolean> {
   const { error } = await supabase
     .from('city_assignments')
     .delete()
     .eq('caller_id', callerId)
     .eq('city_id', cityId)
+
+  if (!error && unassignedBy) {
+    const [{ data: caller }, { data: city }] = await Promise.all([
+      supabase.from('users').select('name').eq('id', callerId).single(),
+      supabase.from('cities').select('name').eq('id', cityId).single(),
+    ])
+
+    await logActivity(
+      unassignedBy,
+      'unassign_city',
+      `Manager unassigned city ${city?.name || cityId} from caller ${caller?.name || callerId}`
+    )
+  }
 
   return !error
 }

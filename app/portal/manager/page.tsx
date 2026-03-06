@@ -1244,13 +1244,6 @@ export default function ManagerPortal() {
       const citySuccess = await assignCityToCaller(callerId, cityId, session?.user_id || '')
       if (!citySuccess) throw new Error('Failed to assign city')
 
-      // Log activity
-      await supabase.from('activity_log').insert({
-        user_id: session?.user_id,
-        action_type: 'assign_niche_city',
-        description: `Manager assigned niche and city to caller`,
-      })
-
       toast({
         title: 'Success',
         description: 'Niche and city assigned successfully',
@@ -2005,7 +1998,7 @@ export default function ManagerPortal() {
                                           setReassigningCity(city.id)
                                           
                                           // Remove city assignment from old caller
-                                          const removeSuccess = await unassignCityFromCaller(oldCallerId, city.id)
+                                          const removeSuccess = await unassignCityFromCaller(oldCallerId, city.id, userId)
                                           if (!removeSuccess) throw new Error('Failed to remove assignment')
                                           
                                           // Check if old caller has any other cities from this niche
@@ -2019,7 +2012,7 @@ export default function ManagerPortal() {
                                           
                                           // If old caller has no more cities in this niche, remove the niche assignment too
                                           if (otherCitiesInNiche.length === 0) {
-                                            await unassignNicheFromCaller(oldCallerId, niche.id)
+                                            await unassignNicheFromCaller(oldCallerId, niche.id, userId)
                                           }
                                           
                                           toast({
@@ -2077,7 +2070,7 @@ export default function ManagerPortal() {
                                         }
 
                                         // Remove from old caller
-                                        const removeSuccess = await unassignCityFromCaller(oldCallerId, city.id)
+                                        const removeSuccess = await unassignCityFromCaller(oldCallerId, city.id, userId)
                                         if (!removeSuccess) throw new Error('Failed to remove from previous caller')
 
                                         // Check if old caller has any other cities from this niche
@@ -2091,7 +2084,7 @@ export default function ManagerPortal() {
 
                                         // If old caller has no more cities in this niche, remove the niche assignment too
                                         if (otherCitiesInNiche.length === 0) {
-                                          await unassignNicheFromCaller(oldCallerId, niche.id)
+                                          await unassignNicheFromCaller(oldCallerId, niche.id, userId)
                                         }
 
                                         // Check if niche is assigned to new caller, if not assign it first
