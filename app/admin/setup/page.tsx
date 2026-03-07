@@ -947,7 +947,7 @@ export default function SetupPage() {
                         <Label htmlFor="lead-details" className="mb-2 block">Lead Details</Label>
                         <Textarea
                           id="lead-details"
-                          placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890"
+                          placeholder="e.g., phone=123-456-7890; 987-654-3210:email=johndoe@example.com:address=123 Main St; Suite 5:"
                           value={leadDetails}
                           onChange={(e) => setLeadDetails(e.target.value)}
                         />
@@ -1078,12 +1078,12 @@ export default function SetupPage() {
                             let parsedEntries: Array<[string, string]> = []
                             
                             // Parse key=value pairs from the string
-                            if (stringValue.includes('=') && stringValue.includes(',')) {
-                              parsedEntries = stringValue.split(',').map(pair => {
+                            if (stringValue.includes('=') && stringValue.includes(':')) {
+                              parsedEntries = stringValue.split(':').map(pair => {
                                 const [k, v] = pair.split('=').map(s => s.trim())
                                 return [k || '', v || ''] as [string, string]
                               }).filter(([k]) => k)
-                            } else if (stringValue.includes('=') && !stringValue.includes(',')) {
+                            } else if (stringValue.includes('=') && !stringValue.includes(':')) {
                               const [k, v] = stringValue.split('=').map(s => s.trim())
                               if (k) {
                                 parsedEntries = [[k, v || '']]

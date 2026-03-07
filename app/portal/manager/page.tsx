@@ -3079,7 +3079,7 @@ export default function ManagerPortal() {
                             <div className="relative border rounded-md bg-background h-32 overflow-y-auto">
                               <Textarea
                                 id="lead-details"
-                                placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890"
+                                placeholder="e.g., phone=123-456-7890; 987-654-3210:email=johndoe@example.com:address=123 Main St; Suite 5:"
                                 value={setupForms.leadDetails || ''}
                                 onChange={(e) => setSetupForms({...setupForms, leadDetails: e.target.value})}
                                 onDoubleClick={() => {
@@ -3116,7 +3116,7 @@ export default function ManagerPortal() {
             <Textarea
               value={setupEditDetailsText}
               onChange={(e) => setSetupEditDetailsText(e.target.value)}
-              placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890&#10;address=123 Main St"
+              placeholder="e.g., phone=123-456-7890; 987-654-3210:email=johndoe@example.com:address=123 Main St; Suite 5:"
               rows={16}
               className="w-full resize-none"
             />
@@ -3185,12 +3185,12 @@ export default function ManagerPortal() {
                             let parsedEntries: Array<[string, string]> = []
                             
                             // Parse key=value pairs from the string
-                            if (stringValue.includes('=') && stringValue.includes(',')) {
-                              parsedEntries = stringValue.split(',').map(pair => {
+                            if (stringValue.includes('=') && stringValue.includes(':')) {
+                              parsedEntries = stringValue.split(':').map(pair => {
                                 const [k, v] = pair.split('=').map(s => s.trim())
                                 return [k || '', v || ''] as [string, string]
                               }).filter(([k]) => k)
-                            } else if (stringValue.includes('=') && !stringValue.includes(',')) {
+                            } else if (stringValue.includes('=') && !stringValue.includes(':')) {
                               const [k, v] = stringValue.split('=').map(s => s.trim())
                               if (k) {
                                 parsedEntries = [[k, v || '']]

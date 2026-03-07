@@ -666,7 +666,7 @@ export default function LeadGenerator() {
                   <div className="relative border rounded-md bg-background h-32 overflow-y-auto">
                     <Textarea
                       id="details"
-                      placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890"
+                      placeholder="e.g., phone=123-456-7890; 987-654-3210:email=johndoe@example.com:address=123 Main St; Suite 5:"
                       value={leadDetails}
                       onChange={(e) => setLeadDetails(e.target.value)}
                       onDoubleClick={() => {
@@ -1170,12 +1170,12 @@ export default function LeadGenerator() {
                           const stringValue = String(value);
                           let parsedEntries: Array<[string, string]> = [];
                           
-                          if (stringValue.includes('=') && stringValue.includes(',')) {
-                            parsedEntries = stringValue.split(',').map(pair => {
+                          if (stringValue.includes('=') && stringValue.includes(':')) {
+                            parsedEntries = stringValue.split(':').map(pair => {
                               const [k, v] = pair.split('=').map(s => s.trim());
                               return [k || '', v || ''] as [string, string];
                             }).filter(([k]) => k);
-                          } else if (stringValue.includes('=') && !stringValue.includes(',')) {
+                          } else if (stringValue.includes('=') && !stringValue.includes(':')) {
                             const [k, v] = stringValue.split('=').map(s => s.trim());
                             if (k) {
                               parsedEntries = [[k, v || '']];
@@ -1250,7 +1250,7 @@ export default function LeadGenerator() {
             <Textarea
               value={editDetailsText}
               onChange={(e) => setEditDetailsText(e.target.value)}
-              placeholder="e.g., email=johndoe@example.com&#10;phone=123-456-7890&#10;address=123 Main St"
+              placeholder="e.g., phone=123-456-7890; 987-654-3210:email=johndoe@example.com:address=123 Main St; Suite 5:"
               rows={16}
               className="w-full resize-none"
             />
