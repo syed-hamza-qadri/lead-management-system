@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
 import { useSession, clearSessionCache } from '@/lib/session'
@@ -60,6 +60,13 @@ export default function AdminDashboard() {
   const [totalLogsCount, setTotalLogsCount] = useState(0)
   const [activeRoleTab, setActiveRoleTab] = useState('all')
   const [selectedUserFilter, setSelectedUserFilter] = useState('all')
+  const [roleCounts, setRoleCounts] = useState({
+    all: 0,
+    admin: 0,
+    manager: 0,
+    caller: 0,
+    lead_generator: 0,
+  })
   const [refreshing, setRefreshing] = useState(false)
   // Backup state
   const [backupLoading, setBackupLoading] = useState(false)
@@ -69,28 +76,110 @@ export default function AdminDashboard() {
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const logsPerPage = 20
   const supabase = getSupabaseClient()
+  const activityTopRef = useRef<HTMLDivElement | null>(null)
+  const previousPageRef = useRef(0)
 
   const fetchData = async () => {
     try {
       if (!session?.user_id) return
-      // Fetch activity logs with pagination
-      const { data: logsData, count, error: logsError } = await supabase
-        .from('activity_log')
-        .select('*', { count: 'exact' })
-        .order('created_at', { ascending: false })
-        .range(currentPage * logsPerPage, (currentPage + 1) * logsPerPage - 1)
-
-      if (logsError) throw logsError
-      
-      setTotalLogsCount(count || 0)
-
-      // Fetch users
+      // Fetch users first (required for role-based server-side log filtering)
       const { data: usersData, error: usersError } = await supabase
         .from('users')
         .select('*')
         .order('created_at', { ascending: false })
 
       if (usersError) throw usersError
+
+      const safeUsersData = usersData || []
+      const selectedUser = selectedUserFilter !== 'all'
+        ? safeUsersData.find((u: any) => u.id === selectedUserFilter)
+        : null
+
+      const usersByRole = {
+        admin: safeUsersData.filter((u: any) => u.role === 'admin').map((u: any) => u.id),
+        manager: safeUsersData.filter((u: any) => u.role === 'manager').map((u: any) => u.id),
+        caller: safeUsersData.filter((u: any) => u.role === 'caller').map((u: any) => u.id),
+        lead_generator: safeUsersData.filter((u: any) => u.role === 'lead_generator').map((u: any) => u.id),
+      }
+
+      // Build role counts for accurate role-tab badges under current user filter context
+      const getCountForRole = async (role: 'all' | 'admin' | 'manager' | 'caller' | 'lead_generator') => {
+        let query = supabase.from('activity_log').select('id', { count: 'exact', head: true })
+
+        if (selectedUserFilter !== 'all') {
+          query = query.eq('user_id', selectedUserFilter)
+
+          if (role !== 'all' && (!selectedUser || selectedUser.role !== role)) {
+            return 0
+          }
+        } else if (role !== 'all') {
+          const roleUserIds = usersByRole[role]
+          if (roleUserIds.length === 0) {
+            return 0
+          }
+          query = query.in('user_id', roleUserIds)
+        }
+
+        const { count } = await query
+        return count || 0
+      }
+
+      const [allCount, adminCount, managerCount, callerCount, leadGeneratorCount] = await Promise.all([
+        getCountForRole('all'),
+        getCountForRole('admin'),
+        getCountForRole('manager'),
+        getCountForRole('caller'),
+        getCountForRole('lead_generator'),
+      ])
+
+      setRoleCounts({
+        all: allCount,
+        admin: adminCount,
+        manager: managerCount,
+        caller: callerCount,
+        lead_generator: leadGeneratorCount,
+      })
+
+      // Fetch activity logs with server-side role/user filters + pagination
+      let logsData: any[] = []
+      let logsCount = 0
+      let skipLogsFetch = false
+
+      let logsQuery = supabase
+        .from('activity_log')
+        .select('*', { count: 'exact' })
+
+      if (selectedUserFilter !== 'all') {
+        logsQuery = logsQuery.eq('user_id', selectedUserFilter)
+      }
+
+      if (activeRoleTab !== 'all') {
+        if (selectedUserFilter !== 'all') {
+          if (!selectedUser || selectedUser.role !== activeRoleTab) {
+            skipLogsFetch = true
+          }
+        } else {
+          const roleUserIds = usersByRole[activeRoleTab as keyof typeof usersByRole] || []
+          if (roleUserIds.length === 0) {
+            skipLogsFetch = true
+          } else {
+            logsQuery = logsQuery.in('user_id', roleUserIds)
+          }
+        }
+      }
+
+      if (!skipLogsFetch) {
+        const { data: logsPageData, count, error: logsError } = await logsQuery
+          .order('created_at', { ascending: false })
+          .range(currentPage * logsPerPage, (currentPage + 1) * logsPerPage - 1)
+
+        if (logsError) throw logsError
+
+        logsData = logsPageData || []
+        logsCount = count || 0
+      }
+
+      setTotalLogsCount(logsCount)
 
       // Fetch stats
       const { count: totalLeads } = await supabase
@@ -127,16 +216,27 @@ export default function AdminDashboard() {
       }))
       setActiveUserDetails(activeUsersList)
 
-      // Fetch enrichment data with JOINs instead of per-log queries
-      const { data: enrichedUsersData } = await supabase
-        .from('users')
-        .select('id, name, role')
-        .in('id', Array.from(new Set((logsData || []).map((l: any) => l.user_id))))
+      const logUserIds = Array.from(new Set((logsData || []).map((l: any) => l.user_id).filter(Boolean)))
+      const logLeadIds = Array.from(new Set((logsData || []).map((l: any) => l.lead_id).filter(Boolean)))
 
-      const { data: enrichedLeadsData } = await supabase
-        .from('leads')
-        .select('id, data')
-        .in('id', Array.from(new Set((logsData || []).map((l: any) => l.lead_id).filter(Boolean))))
+      let enrichedUsersData: any[] = []
+      let enrichedLeadsData: any[] = []
+
+      if (logUserIds.length > 0) {
+        const { data } = await supabase
+          .from('users')
+          .select('id, name, role')
+          .in('id', logUserIds)
+        enrichedUsersData = data || []
+      }
+
+      if (logLeadIds.length > 0) {
+        const { data } = await supabase
+          .from('leads')
+          .select('id, data')
+          .in('id', logLeadIds)
+        enrichedLeadsData = data || []
+      }
 
       // Create lookup maps
       const userMap = new Map((enrichedUsersData || []).map((u: any) => [u.id, u.name]))
@@ -153,7 +253,7 @@ export default function AdminDashboard() {
       }))
 
       setActivities(enrichedLogs)
-      setUsers(usersData || [])
+      setUsers(safeUsersData)
       setStats({
         total_leads: totalLeads || 0,
         total_responses: totalResponses || 0,
@@ -185,12 +285,20 @@ export default function AdminDashboard() {
     }
   }, [session, sessionLoading, router])
 
-  // Fetch data when page changes (pagination only - no real-time subscriptions)
+  // Fetch data when page/filter changes (server-side filtered pagination)
   useEffect(() => {
     if (session?.user_role === 'admin') {
       fetchData()
     }
-  }, [currentPage, session?.user_role])
+  }, [currentPage, activeRoleTab, selectedUserFilter, session?.user_role])
+
+  // Move activity table to top when switching pages
+  useEffect(() => {
+    if (currentPage !== previousPageRef.current) {
+      activityTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      previousPageRef.current = currentPage
+    }
+  }, [currentPage])
 
   const getActionColor = (action: string) => {
     const colors: Record<string, string> = {
@@ -250,29 +358,10 @@ export default function AdminDashboard() {
     return colors[role] || 'bg-gray-100 text-gray-700 border-gray-200'
   }
 
-  // Filter activities by role tab and user filter
-  const getFilteredActivities = () => {
-    let filtered = activities
-    
-    // Filter by role tab
-    if (activeRoleTab !== 'all') {
-      filtered = filtered.filter(a => a.user_role === activeRoleTab)
-    }
-    
-    // Filter by specific user
-    if (selectedUserFilter !== 'all') {
-      filtered = filtered.filter(a => a.user_id === selectedUserFilter)
-    }
-    
-    return filtered
-  }
-
-  const filteredActivities = getFilteredActivities()
-
-  // Get unique users from activities for the user filter dropdown
-  const activityUsers = Array.from(
-    new Map(activities.map(a => [a.user_id, { id: a.user_id, name: a.user_name || 'Unknown', role: a.user_role || 'unknown' }])).values()
-  ).sort((a, b) => a.name.localeCompare(b.name))
+  // Build user options from full users list (not just current page logs)
+  const activityUsers = users
+    .map((u) => ({ id: u.id, name: u.name, role: u.role }))
+    .sort((a, b) => a.name.localeCompare(b.name))
 
   // Filter users in dropdown based on active role tab
   const filteredUserOptions = activeRoleTab === 'all'
@@ -495,6 +584,7 @@ export default function AdminDashboard() {
 
           {/* Activity Tab */}
           <TabsContent value="activity" className="space-y-4">
+            <div ref={activityTopRef} />
             <Card>
               <CardHeader>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -506,7 +596,10 @@ export default function AdminDashboard() {
                     <Filter className="w-4 h-4 text-muted-foreground" />
                     <Select
                       value={selectedUserFilter}
-                      onValueChange={(val) => setSelectedUserFilter(val)}
+                      onValueChange={(val) => {
+                        setSelectedUserFilter(val)
+                        setCurrentPage(0)
+                      }}
                     >
                       <SelectTrigger className="w-[200px]">
                         <SelectValue placeholder="Filter by user" />
@@ -527,6 +620,7 @@ export default function AdminDashboard() {
                         onClick={() => {
                           setSelectedUserFilter('all')
                           setActiveRoleTab('all')
+                          setCurrentPage(0)
                         }}
                         title="Reset filters"
                       >
@@ -544,9 +638,7 @@ export default function AdminDashboard() {
                     { value: 'caller', label: 'Caller' },
                     { value: 'lead_generator', label: 'Lead Generator' },
                   ].map((tab) => {
-                    const count = tab.value === 'all'
-                      ? activities.length
-                      : activities.filter(a => a.user_role === tab.value).length
+                    const count = roleCounts[tab.value as keyof typeof roleCounts] || 0
                     return (
                       <Button
                         key={tab.value}
@@ -555,6 +647,7 @@ export default function AdminDashboard() {
                         onClick={() => {
                           setActiveRoleTab(tab.value)
                           setSelectedUserFilter('all') // Reset user filter when switching role
+                          setCurrentPage(0)
                         }}
                         className="text-xs"
                       >
@@ -568,7 +661,7 @@ export default function AdminDashboard() {
                 </div>
               </CardHeader>
               <CardContent>
-                {filteredActivities.length === 0 ? (
+                {activities.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8">
                     {selectedUserFilter !== 'all' || activeRoleTab !== 'all'
                       ? 'No activity found for the selected filter'
@@ -576,7 +669,7 @@ export default function AdminDashboard() {
                   </p>
                 ) : (
                   <div className="space-y-4">
-                    {filteredActivities.map((activity: any) => (
+                    {activities.map((activity: any) => (
                       <div
                         key={activity.id}
                         className="flex items-start justify-between border-b border-border pb-4 last:border-b-0 cursor-pointer hover:bg-muted/50 p-2 rounded transition-colors"
@@ -630,9 +723,6 @@ export default function AdminDashboard() {
                 <div className="flex items-center justify-between border-t border-border p-4">
                   <div className="text-sm text-muted-foreground">
                     Showing {currentPage * logsPerPage + 1} to {Math.min((currentPage + 1) * logsPerPage, totalLogsCount)} of {totalLogsCount} total logs
-                    {(activeRoleTab !== 'all' || selectedUserFilter !== 'all') && (
-                      <span className="ml-1">({filteredActivities.length} matching filter)</span>
-                    )}
                   </div>
                   <div className="flex gap-2">
                     <Button
