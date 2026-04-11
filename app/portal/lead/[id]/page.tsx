@@ -798,12 +798,12 @@ export default function LeadDetail() {
                       const stringValue = String(value);
                       let parsedEntries: Array<[string, string]> = [];
                       
-                      if (stringValue.includes('=') && stringValue.includes(',')) {
-                        parsedEntries = stringValue.split(',').map(pair => {
+                      if (stringValue.includes('=') && stringValue.includes(':')) {
+                        parsedEntries = stringValue.split(':').map(pair => {
                           const [k, v] = pair.split('=').map(s => s.trim());
                           return [k || '', v || ''] as [string, string];
                         }).filter(([k]) => k);
-                      } else if (stringValue.includes('=') && !stringValue.includes(',')) {
+                      } else if (stringValue.includes('=') && !stringValue.includes(':')) {
                         const [k, v] = stringValue.split('=').map(s => s.trim());
                         if (k) {
                           parsedEntries = [[k, v || '']];

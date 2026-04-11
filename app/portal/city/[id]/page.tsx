@@ -362,12 +362,12 @@ export default function LeadList() {
           const stringValue = String(value);
           
           // Check if value has key=value pairs
-          if (stringValue.includes('=') && stringValue.includes(',')) {
-            stringValue.split(',').forEach(pair => {
+          if (stringValue.includes('=') && stringValue.includes(':')) {
+            stringValue.split(':').forEach(pair => {
               const [k, v] = pair.split('=').map(s => s.trim());
               if (k) fields.push([k, v || '']);
             });
-          } else if (stringValue.includes('=') && !stringValue.includes(',')) {
+          } else if (stringValue.includes('=') && !stringValue.includes(':')) {
             const [k, v] = stringValue.split('=').map(s => s.trim());
             if (k) fields.push([k, v || '']);
           } else {
