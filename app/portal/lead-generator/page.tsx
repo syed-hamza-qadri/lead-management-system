@@ -438,11 +438,15 @@ export default function LeadGenerator() {
         throw new Error('Session not found')
       }
 
+      const userId = session.user_id
+      const deletingLead = allLeads.find((lead) => lead.id === leadToDelete)
+      const deletingLeadName = deletingLead?.data?.name || 'Unknown'
+
       // Fetch current user to verify password
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('password')
-        .eq('id', session.user_id)
+        .eq('id', userId)
         .single()
 
       if (userError || !userData) {
@@ -470,13 +474,22 @@ export default function LeadGenerator() {
 
       if (deleteError) throw deleteError
 
-      // Log activity
-      await supabase.from('activity_log').insert({
-        user_id: session?.user_id,
+      // Log activity after deletion without lead_id to avoid FK issues on deleted lead references.
+      const { error: logError } = await supabase.from('activity_log').insert({
+        user_id: userId,
         action_type: 'delete_lead',
-        lead_id: leadToDelete,
-        description: `Lead generator deleted a lead`,
+        lead_id: null,
+        description: `Lead generator deleted lead: ${deletingLeadName}`,
       })
+
+      // Best-effort fallback to ensure deletion action is still auditable.
+      if (logError) {
+        await supabase.from('activity_log').insert({
+          user_id: userId,
+          action_type: 'delete_lead',
+          description: `Lead generator deleted lead: ${deletingLeadName}`,
+        })
+      }
 
       toast({
         title: 'Success',
