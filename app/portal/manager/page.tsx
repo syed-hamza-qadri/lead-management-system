@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
 import { useSession, clearSessionCache } from '@/lib/session'
@@ -22,8 +22,19 @@ import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination'
 import { Loader2, LogOut, RefreshCw, Plus, Edit2 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
+
+const LEADS_PER_PAGE = 50
 
 interface Caller {
   id: string
@@ -134,9 +145,176 @@ export default function ManagerPortal() {
   const [leadCreatedByFilter, setLeadCreatedByFilter] = useState<string>('')
   const [leadAssignedToFilter, setLeadAssignedToFilter] = useState<string>('')
   const [leadStatusFilter, setLeadStatusFilter] = useState<string>('')
+  const [currentLeadPage, setCurrentLeadPage] = useState<number>(1)
+  const [leadTableRows, setLeadTableRows] = useState<Lead[]>([])
+  const [leadTableTotalCount, setLeadTableTotalCount] = useState<number>(0)
+  const [leadTableLoading, setLeadTableLoading] = useState<boolean>(false)
+  const [leadTableError, setLeadTableError] = useState<string | null>(null)
+  const [leadTableRefreshToken, setLeadTableRefreshToken] = useState<number>(0)
   
   // Debounced search for better performance
   const debouncedSearchFilter = useDebounce(leadSearchFilter, 300)
+  const totalLeadPages = Math.max(1, Math.ceil(leadTableTotalCount / LEADS_PER_PAGE))
+  const hasLeadFilters = Boolean(
+    debouncedSearchFilter.trim() ||
+    leadNicheFilter ||
+    leadCityFilter ||
+    leadCreatedByFilter ||
+    leadAssignedToFilter ||
+    leadStatusFilter
+  )
+
+  const leadPaginationItems = useMemo(() => {
+    if (totalLeadPages <= 7) {
+      return Array.from({ length: totalLeadPages }, (_, index) => index + 1)
+    }
+
+    const pages: Array<number | 'ellipsis'> = [1]
+    const leftBoundary = Math.max(2, currentLeadPage - 1)
+    const rightBoundary = Math.min(totalLeadPages - 1, currentLeadPage + 1)
+
+    if (leftBoundary > 2) {
+      pages.push('ellipsis')
+    }
+
+    for (let page = leftBoundary; page <= rightBoundary; page += 1) {
+      pages.push(page)
+    }
+
+    if (rightBoundary < totalLeadPages - 1) {
+      pages.push('ellipsis')
+    }
+
+    pages.push(totalLeadPages)
+    return pages
+  }, [currentLeadPage, totalLeadPages])
+
+  useEffect(() => {
+    setCurrentLeadPage(1)
+  }, [
+    debouncedSearchFilter,
+    leadNicheFilter,
+    leadCityFilter,
+    leadCreatedByFilter,
+    leadAssignedToFilter,
+    leadStatusFilter,
+  ])
+
+  useEffect(() => {
+    setCurrentLeadPage(prev => Math.min(prev, totalLeadPages))
+  }, [totalLeadPages])
+
+  useEffect(() => {
+    if (!session?.user_id || activeTab !== 'leads') return
+
+    const loadLeadTablePage = async () => {
+      setLeadTableLoading(true)
+      setLeadTableError(null)
+
+      try {
+        const assignedCityIds = leadAssignedToFilter
+          ? cityAssignmentsData
+              .filter(assignment => assignment.caller_id === leadAssignedToFilter)
+              .map(assignment => assignment.city_id)
+          : []
+
+        if (leadAssignedToFilter && assignedCityIds.length === 0) {
+          setLeadTableRows([])
+          setLeadTableTotalCount(0)
+          setLeadResponses({})
+          return
+        }
+
+        let query = supabase
+          .from('leads')
+          .select('id, niche_id, city_id, data, created_by, created_at, actioned_at, status, follow_up_date, correction_status, corrected_at, creator:created_by(id, name)', { count: 'exact' })
+          .order('created_at', { ascending: false })
+
+        const searchTerm = debouncedSearchFilter.trim()
+        if (searchTerm) {
+          query = query.ilike('data->>name', `%${searchTerm}%`) as any
+        }
+
+        if (leadNicheFilter) {
+          query = query.eq('niche_id', leadNicheFilter)
+        }
+
+        if (leadCityFilter) {
+          query = query.eq('city_id', leadCityFilter)
+        }
+
+        if (leadCreatedByFilter) {
+          query = query.eq('created_by', leadCreatedByFilter)
+        }
+
+        if (assignedCityIds.length > 0) {
+          query = query.in('city_id', assignedCityIds)
+        }
+
+        if (leadStatusFilter) {
+          if (leadStatusFilter === 'unactioned') {
+            query = query.or('status.is.null,status.eq.unassigned')
+          } else {
+            query = query.eq('status', leadStatusFilter)
+          }
+        }
+
+        const fromIndex = (currentLeadPage - 1) * LEADS_PER_PAGE
+        const toIndex = fromIndex + LEADS_PER_PAGE - 1
+
+        const { data: leadRows, error, count } = await query.range(fromIndex, toIndex) as any
+
+        if (error) throw error
+
+        const pageRows = (leadRows || []) as Lead[]
+        setLeadTableRows(pageRows)
+        setLeadTableTotalCount(count || 0)
+
+        const pageLeadIds = pageRows.map((lead: Lead) => lead.id)
+        if (pageLeadIds.length > 0) {
+          const { data: pageResponses } = await supabase
+            .from('lead_responses')
+            .select('lead_id, action, employee_id, response_text, scheduled_for, created_at, actioned_at')
+            .in('lead_id', pageLeadIds)
+            .order('created_at', { ascending: false }) as any
+
+          const responseMap: { [leadId: string]: any } = {}
+          ;(pageResponses || []).forEach((response: any) => {
+            if (!responseMap[response.lead_id]) {
+              responseMap[response.lead_id] = response
+            }
+          })
+          setLeadResponses(responseMap)
+        } else {
+          setLeadResponses({})
+        }
+
+        setCurrentLeadPage(prev => Math.min(prev, Math.max(1, Math.ceil((count || 0) / LEADS_PER_PAGE))))
+      } catch (error) {
+        console.error('Error loading paged leads:', error)
+        setLeadTableError('Failed to load leads')
+        setLeadTableRows([])
+        setLeadTableTotalCount(0)
+      } finally {
+        setLeadTableLoading(false)
+      }
+    }
+
+    loadLeadTablePage()
+  }, [
+    session?.user_id,
+    activeTab,
+    currentLeadPage,
+    debouncedSearchFilter,
+    leadNicheFilter,
+    leadCityFilter,
+    leadCreatedByFilter,
+    leadAssignedToFilter,
+    leadStatusFilter,
+    cityAssignmentsData,
+    supabase,
+    leadTableRefreshToken,
+  ])
 
   // Setup tab states
   const [setupDialogs, setSetupDialogs] = useState<{
@@ -290,8 +468,7 @@ export default function ManagerPortal() {
       const { data: leadsData, error: leadsError } = await supabase
         .from('leads')
         .select('*, creator:created_by(id, name), actioned_at')
-        .order('created_at', { ascending: false })
-        .limit(100) as any
+        .order('created_at', { ascending: false }) as any
 
       if (leadsError) {
         console.error('Error fetching leads:', leadsError)
@@ -341,17 +518,9 @@ export default function ManagerPortal() {
       
       setCityAssignmentsData(allCityAssignments || [])
 
-      // Fetch all lead responses once (not per-caller) - limited to recent 1000
-      const { data: allLeadResponses } = await supabase
-        .from('lead_responses')
-        .select('lead_id, action, employee_id, response_text, scheduled_for, created_at, actioned_at')
-        .order('created_at', { ascending: false })
-        .limit(1000) as any
-
       // Create maps for quick lookup instead of iterating
       const nicheMapByCallerId = new Map<string, Niche[]>()
       const cityMapByCallerId = new Map<string, City[]>()
-      const responseMapByLeadAndCaller = new Map<string, Map<string, string>>()
 
       // Build lookup maps
       ;(allNicheAssignments || []).forEach((assignment: any) => {
@@ -366,16 +535,6 @@ export default function ManagerPortal() {
           cityMapByCallerId.set(assignment.caller_id, [])
         }
         cityMapByCallerId.get(assignment.caller_id)!.push(assignment.cities)
-      })
-
-      ;(allLeadResponses || []).forEach((response: any) => {
-        if (!responseMapByLeadAndCaller.has(response.lead_id)) {
-          responseMapByLeadAndCaller.set(response.lead_id, new Map())
-        }
-        // Only store the LATEST action per lead per employee (skip duplicates)
-        if (!responseMapByLeadAndCaller.get(response.lead_id)!.has(response.employee_id)) {
-          responseMapByLeadAndCaller.get(response.lead_id)!.set(response.employee_id, response.action)
-        }
       })
 
       // Calculate performance metrics using maps (no additional queries)
@@ -428,14 +587,8 @@ export default function ManagerPortal() {
       setCallerNiches(batchCallerNiches)
       setCallerCities(batchCallerCities)
 
-      // Create a map of lead_id to latest response (full response object)
-      const responseMap: { [leadId: string]: any } = {}
-      ;(allLeadResponses || []).forEach((response: any) => {
-        if (!responseMap[response.lead_id]) {
-          responseMap[response.lead_id] = response
-        }
-      })
-      setLeadResponses(responseMap)
+      // Leads tab now loads page-specific latest responses server-side.
+      setLeadResponses({})
 
       // Calculate lead generator performance
       const generatorPerformanceData = new Map<string, LeadGeneratorPerformance>()
@@ -501,8 +654,7 @@ export default function ManagerPortal() {
       const { data: leadsData, error: leadsError } = await supabase
         .from('leads')
         .select('*, creator:created_by(id, name), actioned_at')
-        .order('created_at', { ascending: false })
-        .limit(100) as any
+        .order('created_at', { ascending: false }) as any
 
       if (leadsError) {
         console.error('Error fetching leads:', leadsError)
@@ -569,6 +721,7 @@ export default function ManagerPortal() {
       setCityAssignmentsData(allCityAssignments || [])
       setAllUsers(freshAllUsers)
       setLeadResponses(responseMap)
+      setLeadTableRefreshToken(token => token + 1)
 
       // Calculate lead status metrics
       const metrics = {
@@ -698,6 +851,13 @@ export default function ManagerPortal() {
         } : l
       )
       setLeads(updatedLeads)
+      setLeadTableRows(prev => prev.map(l => 
+        l.id === leadId ? {
+          ...l,
+          status: mappedStatus,
+          follow_up_date: updateData.follow_up_date || l.follow_up_date || null
+        } : l
+      ))
       
       // Update leadResponses to reflect the new action timestamp
       setLeadResponses(prev => ({
@@ -936,33 +1096,6 @@ export default function ManagerPortal() {
           .from('leads')
           .select('id, created_by, status, correction_status')
           .order('created_at', { ascending: false }) as any
-
-        const { data: freshResponses } = await supabase
-          .from('lead_responses')
-          .select('lead_id, action, employee_id, response_text, scheduled_for, created_at, actioned_at')
-          .order('created_at', { ascending: false })
-          .limit(1000) as any
-
-        // Update leadResponses with latest response for each lead (for dialog pre-fill)
-        const freshResponseMap: { [leadId: string]: any } = {}
-        ;(freshResponses || []).forEach((response: any) => {
-          if (!freshResponseMap[response.lead_id]) {
-            freshResponseMap[response.lead_id] = response
-          }
-        })
-        setLeadResponses(freshResponseMap)
-
-        // Create response map for lead generators - store only latest action per lead per employee
-        const responseMapByLeadAndCallerId = new Map<string, Map<string, string>>()
-        ;(freshResponses || []).forEach((response: any) => {
-          if (!responseMapByLeadAndCallerId.has(response.lead_id)) {
-            responseMapByLeadAndCallerId.set(response.lead_id, new Map())
-          }
-          // Only store the LATEST action per lead per employee (skip if already exists)
-          if (!responseMapByLeadAndCallerId.get(response.lead_id)!.has(response.employee_id)) {
-            responseMapByLeadAndCallerId.get(response.lead_id)!.set(response.employee_id, response.action)
-          }
-        })
 
         // Calculate lead status metrics and correction metrics for summary cards
         const metrics = {
@@ -2186,8 +2319,16 @@ export default function ManagerPortal() {
             </Button>
           </CardHeader>
           <CardContent className="space-y-4">
-            {leads.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No leads available yet. Create leads in the Lead Generator to view them here.</p>
+            {leadTableLoading && leadTableRows.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Loading leads...</p>
+            ) : leadTableError ? (
+              <p className="text-sm text-muted-foreground">{leadTableError}</p>
+            ) : leadTableTotalCount === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {hasLeadFilters
+                  ? 'No leads match the current filters.'
+                  : 'No leads available yet. Create leads in the Lead Generator to view them here.'}
+              </p>
             ) : (
               <>
                 {/* Search and Filters */}
@@ -2203,7 +2344,8 @@ export default function ManagerPortal() {
                   <div className="w-[120px] shrink-0">
                     <Select value={leadNicheFilter} onValueChange={(v) => {
                       setLeadNicheFilter(v)
-                      setLeadCityFilter('') // Reset city filter when niche changes
+                      setLeadCityFilter('')
+                      setCurrentLeadPage(1)
                     }}>
                       <SelectTrigger>
                         <SelectValue placeholder="Niche..." />
@@ -2216,7 +2358,10 @@ export default function ManagerPortal() {
                     </Select>
                   </div>
                   <div className="min-w-[120px] shrink-0">
-                    <Select value={leadCityFilter} onValueChange={setLeadCityFilter} disabled={!leadNicheFilter}>
+                    <Select value={leadCityFilter} onValueChange={(value) => {
+                      setLeadCityFilter(value)
+                      setCurrentLeadPage(1)
+                    }} disabled={!leadNicheFilter}>
                       <SelectTrigger className="truncate">
                         <SelectValue placeholder={!leadNicheFilter ? "Niche first..." : "City..."} />
                       </SelectTrigger>
@@ -2230,28 +2375,31 @@ export default function ManagerPortal() {
                     </Select>
                   </div>
                   <div className="w-[120px] shrink-0">
-                    <Select value={leadCreatedByFilter} onValueChange={setLeadCreatedByFilter}>
+                    <Select value={leadCreatedByFilter} onValueChange={(value) => {
+                      setLeadCreatedByFilter(value)
+                      setCurrentLeadPage(1)
+                    }}>
                       <SelectTrigger>
                         <SelectValue placeholder="Created..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {/* Get unique creators from leads */}
-                        {Array.from(new Set(leads.map(l => l.creator?.id))).map(creatorId => {
-                          const creator = leads.find(l => l.creator?.id === creatorId)?.creator
-                          return creator ? (
-                            <SelectItem key={creator.id} value={creator.id}>{creator.name}</SelectItem>
-                          ) : null
-                        })}
+                        {allUsers
+                          .filter(user => user.role === 'lead_generator')
+                          .map(user => (
+                            <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
+                          ))}
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="w-[120px] shrink-0">
-                    <Select value={leadAssignedToFilter} onValueChange={setLeadAssignedToFilter}>
+                    <Select value={leadAssignedToFilter} onValueChange={(value) => {
+                      setLeadAssignedToFilter(value)
+                      setCurrentLeadPage(1)
+                    }}>
                       <SelectTrigger>
                         <SelectValue placeholder="Caller..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {/* Get unique callers from city assignments */}
                         {Array.from(new Set(cityAssignmentsData.map(ca => ca.caller_id))).map(callerId => {
                           const caller = allUsers.find(u => u.id === callerId)
                           return caller ? (
@@ -2262,7 +2410,10 @@ export default function ManagerPortal() {
                     </Select>
                   </div>
                   <div className="w-[120px] shrink-0">
-                    <Select value={leadStatusFilter} onValueChange={setLeadStatusFilter}>
+                    <Select value={leadStatusFilter} onValueChange={(value) => {
+                      setLeadStatusFilter(value)
+                      setCurrentLeadPage(1)
+                    }}>
                       <SelectTrigger>
                         <SelectValue placeholder="Status..." />
                       </SelectTrigger>
@@ -2284,6 +2435,7 @@ export default function ManagerPortal() {
                       setLeadCreatedByFilter('')
                       setLeadAssignedToFilter('')
                       setLeadStatusFilter('')
+                      setCurrentLeadPage(1)
                     }}
                     className="shrink-0"
                   >
@@ -2291,9 +2443,10 @@ export default function ManagerPortal() {
                   </Button>
                 </div>
 
-                {/* Table */}
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
+                <>
+                  {/* Table */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-border bg-muted/50">
                         <th className="text-left px-2 py-2 font-semibold whitespace-nowrap">#</th>
@@ -2309,202 +2462,214 @@ export default function ManagerPortal() {
                       </tr>
                     </thead>
                     <tbody>
-                      {leads
-                        .filter(lead => {
-                          const searchMatch = !debouncedSearchFilter || (lead.data?.name || 'Lead').toLowerCase().includes(debouncedSearchFilter.toLowerCase())
-                          const nicheMatch = !leadNicheFilter || lead.niche_id === leadNicheFilter
-                          const cityMatch = !leadCityFilter || lead.city_id === leadCityFilter
-                          const createdByMatch = !leadCreatedByFilter || lead.creator?.id === leadCreatedByFilter
-                          
-                          // For assigned to, find the caller assigned to this lead's city
-                          let assignedToMatch = true
-                          if (leadAssignedToFilter) {
-                            const cityAssignment = cityAssignmentsData.find(ca => ca.city_id === lead.city_id)
-                            assignedToMatch = cityAssignment?.caller_id === leadAssignedToFilter
-                          }
+                      {leadTableRows.map((lead, index) => {
+                        const niche = niches.find(n => n.id === lead.niche_id)
+                        const city = cities.find(c => c.id === lead.city_id)
+                        const cityAssignment = cityAssignmentsData.find(ca => ca.city_id === lead.city_id)
+                        const assignedCaller = cityAssignment ? allUsers.find(u => u.id === cityAssignment.caller_id) : null
+                        const assignedByManager = cityAssignment ? allUsers.find(u => u.id === cityAssignment.assigned_by) : null
+                        const lastResponse = leadResponses[lead.id]
 
-                          // For status filter
-                          let statusMatch = true
-                          if (leadStatusFilter) {
-                            if (leadStatusFilter === 'unactioned') {
-                              // Unactioned means no status or unassigned status
-                              statusMatch = !lead.status || lead.status === 'unassigned'
-                            } else {
-                              const leadStatus = lead.status?.toLowerCase() || ''
-                              statusMatch = leadStatus === leadStatusFilter.toLowerCase()
-                            }
-                          }
-                          
-                          return searchMatch && nicheMatch && cityMatch && createdByMatch && assignedToMatch && statusMatch
-                        })
-                        .map((lead, index) => {
-                          const niche = niches.find(n => n.id === lead.niche_id)
-                          const city = cities.find(c => c.id === lead.city_id)
-                          
-                          // Find the city assignment for this lead's city
-                          const cityAssignment = cityAssignmentsData.find(ca => ca.city_id === lead.city_id)
-                          // Get caller assigned to this city (from allUsers which includes both callers and managers)
-                          const assignedCaller = cityAssignment ? allUsers.find(u => u.id === cityAssignment.caller_id) : null
-                          // Get manager who made the assignment (from allUsers)
-                          const assignedByManager = cityAssignment ? allUsers.find(u => u.id === cityAssignment.assigned_by) : null
-                          
-                          // Get last action taken on this lead
-                          const lastResponse = leadResponses[lead.id]
-
-                          const getActionDisplay = () => {
-                            // First check if lead has a current status (from direct update)
-                            if (lead.status) {
-                              const statusLower = lead.status.toLowerCase()
-                              if (statusLower === 'approved') {
-                                return <Badge className="bg-green-100 text-green-700">Approved</Badge>
-                              }
-                              if (statusLower === 'declined') {
-                                return <Badge className="bg-red-100 text-red-700">Declined</Badge>
-                              }
-                              if (statusLower === 'scheduled') {
-                                if (lead.follow_up_date) {
-                                  const daysRemaining = getRemainingDays(lead.follow_up_date)
-                                  return (
-                                    <span className="text-xs text-amber-600">
-                                      Scheduled - {daysRemaining > 0 ? `${daysRemaining} days` : 'Due'}
-                                    </span>
-                                  )
-                                }
-                                return <Badge className="bg-amber-100 text-amber-700">Scheduled</Badge>
-                              }
-                            }
-                            
-                            // Fallback to last response action if no direct status is set
-                            if (!lastResponse) return <span className="text-xs text-muted-foreground">—</span>
-                            
-                            let actionText = lastResponse.action
-                            if (lastResponse.action === 'later') {
-                              actionText = 'Schedule'
-                            } else if (lastResponse.action) {
-                              actionText = lastResponse.action?.charAt(0).toUpperCase() + lastResponse.action?.slice(1)
-                            }
-                            
-                            if (lastResponse.action === 'later' && lastResponse.scheduled_for) {
-                              const daysRemaining = getRemainingDays(lastResponse.scheduled_for)
-                              return (
-                                <span className="text-xs text-amber-600">
-                                  {actionText} - {daysRemaining > 0 ? `${daysRemaining} days` : 'Due'}
-                                </span>
-                              )
-                            }
-                            
-                            if (lastResponse.action === 'approve' || lastResponse.action === 'approved') {
+                        const getActionDisplay = () => {
+                          if (lead.status) {
+                            const statusLower = lead.status.toLowerCase()
+                            if (statusLower === 'approved') {
                               return <Badge className="bg-green-100 text-green-700">Approved</Badge>
                             }
-                            if (lastResponse.action === 'decline' || lastResponse.action === 'declined') {
+                            if (statusLower === 'declined') {
                               return <Badge className="bg-red-100 text-red-700">Declined</Badge>
                             }
-                            if (lastResponse.action === 'schedule' || lastResponse.action === 'later') {
+                            if (statusLower === 'scheduled') {
+                              if (lead.follow_up_date) {
+                                const daysRemaining = getRemainingDays(lead.follow_up_date)
+                                return (
+                                  <span className="text-xs text-amber-600">
+                                    Scheduled - {daysRemaining > 0 ? `${daysRemaining} days` : 'Due'}
+                                  </span>
+                                )
+                              }
                               return <Badge className="bg-amber-100 text-amber-700">Scheduled</Badge>
                             }
-                            
-                            return <Badge variant="outline">{actionText}</Badge>
                           }
-                          
-                          return (
-                            <tr key={lead.id} className="border-b border-border hover:bg-muted/50">
-                              <td className="px-2 py-2 font-medium text-muted-foreground text-xs">{index + 1}</td>
-                              <td className="px-2 py-2 whitespace-nowrap">
-                                <button
-                                  onClick={() => {
-                                    setSelectedLeadForDetails(lead)
-                                    setLeadDetailsDialogOpen(true)
-                                  }}
-                                  className="text-primary hover:underline cursor-pointer font-medium text-xs"
-                                >
-                                  {lead.data?.name || 'Lead'}
-                                </button>
-                              </td>
-                              <td className="px-2 py-2 text-muted-foreground text-xs whitespace-nowrap">{niche?.name}</td>
-                              <td className="px-2 py-2 text-muted-foreground text-xs whitespace-nowrap">{city?.name}</td>
-                              <td className="px-2 py-2 text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(lead.created_at)}</td>
-                              <td className="px-2 py-2 text-xs text-muted-foreground whitespace-nowrap">
-                                {lead.actioned_at ? formatDateTime(lead.actioned_at) : '—'}
-                              </td>
-                              <td className="px-2 py-2 text-xs whitespace-nowrap">
-                                <Badge variant="secondary" className="text-xs">{lead.creator?.name || 'Unknown'}</Badge>
-                              </td>
-                              <td className="px-2 py-2 text-xs whitespace-nowrap">
-                                {assignedCaller ? (
-                                  <Badge variant="outline" className="text-xs">{assignedCaller.name}</Badge>
-                                ) : (
-                                  <span className="text-xs text-muted-foreground">Unassigned</span>
-                                )}
-                              </td>
-                              <td className="px-2 py-2 text-xs whitespace-nowrap">
-                                {assignedByManager ? (
-                                  <Badge variant="outline" className="bg-blue-50 text-xs">{assignedByManager.name}</Badge>
-                                ) : (
-                                  <span className="text-xs text-muted-foreground">—</span>
-                                )}
-                              </td>
-                              <td className="px-2 py-2 text-xs whitespace-nowrap">
-                                <div
-                                  onDoubleClick={() => {
-                                    const cityAssignment = cityAssignmentsData.find(ca => ca.city_id === lead.city_id)
-                                    const assignedCaller = cityAssignment ? allUsers.find(u => u.id === cityAssignment.caller_id) : null
-                                    
-                                    // Pre-fill days if lead is scheduled
-                                    let daysValue = ''
-                                    if (lead.status === 'scheduled' && lead.follow_up_date) {
-                                      const followUpDate = new Date(lead.follow_up_date)
-                                      const today = new Date()
-                                      today.setHours(0, 0, 0, 0)
-                                      followUpDate.setHours(0, 0, 0, 0)
-                                      daysValue = Math.max(1, Math.ceil((followUpDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))).toString()
+
+                          if (!lastResponse) return <span className="text-xs text-muted-foreground">—</span>
+
+                          let actionText = lastResponse.action
+                          if (lastResponse.action === 'later') {
+                            actionText = 'Schedule'
+                          } else if (lastResponse.action) {
+                            actionText = lastResponse.action?.charAt(0).toUpperCase() + lastResponse.action?.slice(1)
+                          }
+
+                          if (lastResponse.action === 'later' && lastResponse.scheduled_for) {
+                            const daysRemaining = getRemainingDays(lastResponse.scheduled_for)
+                            return (
+                              <span className="text-xs text-amber-600">
+                                {actionText} - {daysRemaining > 0 ? `${daysRemaining} days` : 'Due'}
+                              </span>
+                            )
+                          }
+
+                          if (lastResponse.action === 'approve' || lastResponse.action === 'approved') {
+                            return <Badge className="bg-green-100 text-green-700">Approved</Badge>
+                          }
+                          if (lastResponse.action === 'decline' || lastResponse.action === 'declined') {
+                            return <Badge className="bg-red-100 text-red-700">Declined</Badge>
+                          }
+                          if (lastResponse.action === 'schedule' || lastResponse.action === 'later') {
+                            return <Badge className="bg-amber-100 text-amber-700">Scheduled</Badge>
+                          }
+
+                          return <Badge variant="outline">{actionText}</Badge>
+                        }
+
+                        return (
+                          <tr key={lead.id} className="border-b border-border hover:bg-muted/50">
+                            <td className="px-2 py-2 font-medium text-muted-foreground text-xs">
+                              {(currentLeadPage - 1) * LEADS_PER_PAGE + index + 1}
+                            </td>
+                            <td className="px-2 py-2 whitespace-nowrap">
+                              <button
+                                onClick={() => {
+                                  setSelectedLeadForDetails(lead)
+                                  setLeadDetailsDialogOpen(true)
+                                }}
+                                className="text-primary hover:underline cursor-pointer font-medium text-xs"
+                              >
+                                {lead.data?.name || 'Lead'}
+                              </button>
+                            </td>
+                            <td className="px-2 py-2 text-muted-foreground text-xs whitespace-nowrap">{niche?.name}</td>
+                            <td className="px-2 py-2 text-muted-foreground text-xs whitespace-nowrap">{city?.name}</td>
+                            <td className="px-2 py-2 text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(lead.created_at)}</td>
+                            <td className="px-2 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                              {lead.actioned_at ? formatDateTime(lead.actioned_at) : '—'}
+                            </td>
+                            <td className="px-2 py-2 text-xs whitespace-nowrap">
+                              <Badge variant="secondary" className="text-xs">{lead.creator?.name || 'Unknown'}</Badge>
+                            </td>
+                            <td className="px-2 py-2 text-xs whitespace-nowrap">
+                              {assignedCaller ? (
+                                <Badge variant="outline" className="text-xs">{assignedCaller.name}</Badge>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">Unassigned</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-2 text-xs whitespace-nowrap">
+                              {assignedByManager ? (
+                                <Badge variant="outline" className="bg-blue-50 text-xs">{assignedByManager.name}</Badge>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-2 text-xs whitespace-nowrap">
+                              <div
+                                onDoubleClick={() => {
+                                  const cityAssignment = cityAssignmentsData.find(ca => ca.city_id === lead.city_id)
+                                  const assignedCaller = cityAssignment ? allUsers.find(u => u.id === cityAssignment.caller_id) : null
+
+                                  let daysValue = ''
+                                  if (lead.status === 'scheduled' && lead.follow_up_date) {
+                                    const followUpDate = new Date(lead.follow_up_date)
+                                    const today = new Date()
+                                    today.setHours(0, 0, 0, 0)
+                                    followUpDate.setHours(0, 0, 0, 0)
+                                    daysValue = Math.max(1, Math.ceil((followUpDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))).toString()
+                                  }
+
+                                  setEditingStatusLeadId(lead.id)
+                                  setStatusUpdate(lead.status === 'scheduled' ? 'schedule' : (lead.status || ''))
+                                  setScheduleDays(daysValue)
+                                  const existingResponse = leadResponses[lead.id]
+                                  setStatusMessage(existingResponse?.response_text || '')
+
+                                  let lastActionBy = 'Unknown'
+                                  let lastActionTime = ''
+                                  if (existingResponse?.employee_id) {
+                                    const actionEmployee = allUsers.find(u => u.id === existingResponse.employee_id)
+                                    lastActionBy = actionEmployee?.name || 'Unknown'
+                                    if (existingResponse.actioned_at) {
+                                      const actionDate = new Date(existingResponse.actioned_at)
+                                      lastActionTime = actionDate.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
                                     }
-                                    
-                                    setEditingStatusLeadId(lead.id)
-                                    setStatusUpdate(lead.status === 'scheduled' ? 'schedule' : (lead.status || ''))
-                                    setScheduleDays(daysValue)
-                                    // Pre-fill message with existing response_text if available
-                                    const existingResponse = leadResponses[lead.id]
-                                    setStatusMessage(existingResponse?.response_text || '')
-                                    
-                                    // Get last action employee name and time
-                                    let lastActionBy = 'Unknown'
-                                    let lastActionTime = ''
-                                    if (existingResponse?.employee_id) {
-                                      const actionEmployee = allUsers.find(u => u.id === existingResponse.employee_id)
-                                      lastActionBy = actionEmployee?.name || 'Unknown'
-                                      if (existingResponse.actioned_at) {
-                                        const actionDate = new Date(existingResponse.actioned_at)
-                                        lastActionTime = actionDate.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                                      }
-                                    }
-                                    
-                                    const niche = niches.find(n => n.id === lead.niche_id)
-                                    const city = cities.find(c => c.id === lead.city_id)
-                                    
-                                    setEditingLeadDetails({
-                                      index: index + 1,
-                                      name: lead.data?.name || 'Lead',
-                                      callerName: assignedCaller?.name || 'Unassigned',
-                                      leadId: lead.id,
-                                      nicheId: lead.niche_id,
-                                      cityId: lead.city_id,
-                                      lastActionBy,
-                                      lastActionTime
-                                    })
-                                    setStatusDialogOpen(true)
-                                  }}
-                                  className="cursor-pointer hover:opacity-70 transition-opacity py-1"
-                                  title="Double-click to edit"
-                                >
-                                  {getActionDisplay()}
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        })}
+                                  }
+
+                                  setEditingLeadDetails({
+                                    index: (currentLeadPage - 1) * LEADS_PER_PAGE + index + 1,
+                                    name: lead.data?.name || 'Lead',
+                                    callerName: assignedCaller?.name || 'Unassigned',
+                                    leadId: lead.id,
+                                    nicheId: lead.niche_id,
+                                    cityId: lead.city_id,
+                                    lastActionBy,
+                                    lastActionTime
+                                  })
+                                  setStatusDialogOpen(true)
+                                }}
+                                className="cursor-pointer hover:opacity-70 transition-opacity py-1"
+                                title="Double-click to edit"
+                              >
+                                {getActionDisplay()}
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
-                  </table>
-                </div>
+                    </table>
+                  </div>
+
+                  <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm text-muted-foreground">
+                      Showing {leadTableTotalCount === 0 ? 0 : (currentLeadPage - 1) * LEADS_PER_PAGE + 1} to {Math.min(currentLeadPage * LEADS_PER_PAGE, leadTableTotalCount)} of {leadTableTotalCount} leads
+                    </p>
+                    {leadTableTotalCount > LEADS_PER_PAGE && (
+                      <Pagination className="justify-end sm:justify-start">
+                        <PaginationContent>
+                          <PaginationItem>
+                            <PaginationPrevious
+                              href="#"
+                              onClick={(e) => {
+                                e.preventDefault()
+                                setCurrentLeadPage(prev => Math.max(1, prev - 1))
+                              }}
+                              className={currentLeadPage === 1 ? 'pointer-events-none opacity-50' : ''}
+                            />
+                          </PaginationItem>
+                          {leadPaginationItems.map((item, index) => (
+                            <PaginationItem key={`${item}-${index}`}>
+                              {item === 'ellipsis' ? (
+                                <PaginationEllipsis />
+                              ) : (
+                                <PaginationLink
+                                  href="#"
+                                  isActive={currentLeadPage === item}
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    setCurrentLeadPage(item)
+                                  }}
+                                  className="cursor-pointer"
+                                >
+                                  {item}
+                                </PaginationLink>
+                              )}
+                            </PaginationItem>
+                          ))}
+                          <PaginationItem>
+                            <PaginationNext
+                              href="#"
+                              onClick={(e) => {
+                                e.preventDefault()
+                                setCurrentLeadPage(prev => Math.min(totalLeadPages, prev + 1))
+                              }}
+                              className={currentLeadPage === totalLeadPages ? 'pointer-events-none opacity-50' : ''}
+                            />
+                          </PaginationItem>
+                        </PaginationContent>
+                      </Pagination>
+                    )}
+                  </div>
+                </>
               </>
             )}
           </CardContent>
