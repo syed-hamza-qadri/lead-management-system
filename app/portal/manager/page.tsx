@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabaseClient } from '@/lib/supabase-client'
 import { useSession, clearSessionCache } from '@/lib/session'
@@ -151,6 +151,7 @@ export default function ManagerPortal() {
   const [leadTableLoading, setLeadTableLoading] = useState<boolean>(false)
   const [leadTableError, setLeadTableError] = useState<string | null>(null)
   const [leadTableRefreshToken, setLeadTableRefreshToken] = useState<number>(0)
+  const leadTableRef = useRef<HTMLDivElement | null>(null)
   
   // Debounced search for better performance
   const debouncedSearchFilter = useDebounce(leadSearchFilter, 300)
@@ -203,6 +204,19 @@ export default function ManagerPortal() {
   useEffect(() => {
     setCurrentLeadPage(prev => Math.min(prev, totalLeadPages))
   }, [totalLeadPages])
+
+  useEffect(() => {
+    if (activeTab !== 'leads') return
+    // Scroll the leads table into view when the page changes
+    if (leadTableRef?.current) {
+      try {
+        leadTableRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      } catch {
+        // fallback: instant
+        leadTableRef.current.scrollIntoView({ block: 'start' })
+      }
+    }
+  }, [currentLeadPage, activeTab])
 
   useEffect(() => {
     if (!session?.user_id || activeTab !== 'leads') return
@@ -2445,7 +2459,7 @@ export default function ManagerPortal() {
 
                 <>
                   {/* Table */}
-                  <div className="overflow-x-auto">
+                    <div ref={leadTableRef} className="overflow-x-auto">
                     <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-border bg-muted/50">
